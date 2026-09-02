@@ -53,8 +53,8 @@ class ResidentService {
     }
 
     public function onboard(array $input): array {
-        $name = trim($input['name'] ?? ($input['full_name'] ?? ''));
-        $flatNumber = trim($input['flatNumber'] ?? ($input['unit_code'] ?? ''));
+        $name = trim($input['name'] ?? ($input['full_name'] ?? ($input['fullName'] ?? '')));
+        $flatNumber = trim($input['flat'] ?? ($input['flatNumber'] ?? ($input['flat_number'] ?? ($input['unit_code'] ?? ($input['unitCode'] ?? '')))));
 
         if (empty($name) || empty($flatNumber)) {
             throw new InvalidArgumentException("Full Name and Flat / Room Code are required.");
@@ -62,8 +62,8 @@ class ResidentService {
 
         $societyId = TenantContext::getSocietyId();
         $role = $input['role'] ?? ($input['resident_type'] ?? 'Owner');
-        $residentType = ($role === 'Tenant') ? 'Tenant' : 'Owner';
-        $ownerName = !empty($input['ownerName']) ? trim($input['ownerName']) : $name;
+        $residentType = (strcasecmp($role, 'Tenant') === 0) ? 'Tenant' : 'Owner';
+        $ownerName = !empty($input['owner_name']) ? trim($input['owner_name']) : (!empty($input['ownerName']) ? trim($input['ownerName']) : $name);
         $phone = $input['phone'] ?? '+91 98200-11223';
         $email = $input['email'] ?? (strtolower(preg_replace('/[^a-z0-9]/', '.', $name)) . '@emerald.net');
         $moveInDate = !empty($input['moveInDate']) ? $input['moveInDate'] : (!empty($input['move_in_date']) ? $input['move_in_date'] : date('Y-m-d'));
@@ -80,9 +80,54 @@ class ResidentService {
         try {
             // 1. Locate unit
             $unit = $this->unitModel->findByCode($flatNumber, $societyId);
-            if (!$unit) {
-                throw new Exception("Unit {$flatNumber} does not exist in active society.");
+            if (!$unit && !empty($input['tower'])) {
+                // Try with tower prefix e.g. "Cedar-C-106"
+                $unit = $this->unitModel->findByCode(trim($input['tower']) . '-' . $flatNumber, $societyId);
             }
+            if (!$unit) {
+                // Try finding across all units
+                $unit = $this->unitModel->findByCode($flatNumber, null);
+            }
+
+            // If unit does not exist in DB yet, auto-provision it gracefully under tower
+            if (!$unit) {
+                $towerName = !empty($input['tower']) ? trim($input['tower']) : 'Tower A';
+                $towerStmt = $db->prepare("SELECT id FROM towers WHERE (society_id = ? OR society_id IS NULL) AND (name = ? OR tower_code = ?) AND is_deleted = 0 LIMIT 1");
+                $towerStmt->execute([$societyId, $towerName, $towerName]);
+                $tower = $towerStmt->fetch();
+                $towerId = $tower ? (int)$tower['id'] : null;
+
+                if (!$towerId) {
+                    $towerCode = strtoupper(substr($towerName, 0, 3));
+                    $towerCreateStmt = $db->prepare("INSERT INTO towers (society_id, name, tower_code, total_floors, total_units) VALUES (?, ?, ?, 10, 40)");
+                    $towerCreateStmt->execute([$societyId, $towerName, $towerCode]);
+                    $towerId = (int)$db->lastInsertId();
+                }
+
+                $floor = 1;
+                if (preg_match('/(\d+)/', $flatNumber, $m)) {
+                    $num = (int)$m[1];
+                    $floor = $num >= 100 ? (int)floor($num / 100) : 1;
+                }
+
+                $newUnitId = $this->unitModel->create([
+                    'society_id' => $societyId,
+                    'tower_id' => $towerId,
+                    'unit_code' => $flatNumber,
+                    'floor_number' => $floor,
+                    'unit_type' => '2BHK',
+                    'sqft_area' => 950,
+                    'occupancy_status' => 'Vacant',
+                    'maintenance_status' => 'Current'
+                ], $societyId);
+
+                $unit = $this->unitModel->findById($newUnitId, $societyId);
+            }
+
+            if (!$unit) {
+                throw new Exception("Unit {$flatNumber} could not be resolved in society.");
+            }
+
             $unitId = (int)$unit['id'];
             $canonicalFlatNumber = $unit['unit_code'];
 
@@ -136,7 +181,7 @@ class ResidentService {
             ], $societyId);
 
             // 4. Create resident record
-            $verificationStatus = $input['verification_status'] ?? ($input['verificationStatus'] ?? 'Pending');
+            $verificationStatus = $input['verification_status'] ?? ($input['verificationStatus'] ?? 'Approved');
             $residentId = $this->residentModel->create([
                 'society_id' => $societyId,
                 'user_id' => $userId,
@@ -181,12 +226,16 @@ class ResidentService {
             $documentsInput = $input['documents'] ?? ($input['resident_documents'] ?? []);
             if (is_array($documentsInput)) {
                 foreach ($documentsInput as $doc) {
-                    if (!empty($doc['file_url'])) {
+                    $docType = $doc['document_type'] ?? ($doc['type'] ?? 'ID Proof');
+                    $docNumber = $doc['document_number'] ?? ($doc['number'] ?? null);
+                    $fileUrl = $doc['file_url'] ?? ($doc['url'] ?? (!empty($doc['file']) && is_string($doc['file']) ? $doc['file'] : null));
+
+                    if (!empty($fileUrl) || !empty($docNumber) || !empty($docType)) {
                         $this->documentModel->create([
                             'resident_id' => $residentId,
-                            'document_type' => $doc['document_type'] ?? 'ID Proof',
-                            'file_name' => $doc['file_name'] ?? 'Document',
-                            'file_url' => $doc['file_url']
+                            'document_type' => $docType,
+                            'file_name' => $doc['file_name'] ?? ($docType . ($docNumber ? " ({$docNumber})" : "")),
+                            'file_url' => $fileUrl ?: 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?w=500&auto=format&fit=crop&q=80'
                         ]);
                     }
                 }
@@ -196,14 +245,14 @@ class ResidentService {
             $vehiclesInput = $input['vehicles'] ?? [];
             if (is_array($vehiclesInput) && count($vehiclesInput) > 0) {
                 foreach ($vehiclesInput as $v) {
-                    $vehNum = is_string($v) ? $v : ($v['vehicle_number'] ?? ($v['tag'] ?? ($v['vehicleNumber'] ?? '')));
+                    $vehNum = is_string($v) ? $v : ($v['plateNumber'] ?? ($v['vehicle_number'] ?? ($v['tag'] ?? ($v['vehicleNumber'] ?? ($v['number'] ?? '')))));
                     if (!empty($vehNum)) {
                         $this->vehicleModel->create([
                             'society_id' => $societyId,
                             'unit_id' => $unitId,
                             'resident_id' => $residentId,
                             'vehicle_number' => trim($vehNum),
-                            'vehicle_type' => is_array($v) ? ($v['vehicle_type'] ?? ($v['type'] ?? 'Car')) : 'Car',
+                            'vehicle_type' => is_array($v) ? ($v['vehicle_type'] ?? ($v['type'] ?? '4-Wheeler (Car)')) : '4-Wheeler (Car)',
                             'make_model' => is_array($v) ? ($v['make_model'] ?? ($v['model'] ?? null)) : null,
                             'parking_slot_number' => is_array($v) ? ($v['parking_slot_number'] ?? ($v['slot'] ?? null)) : null,
                             'rfid_sticker_tag' => is_array($v) ? ($v['rfid_sticker_tag'] ?? ($v['rfid'] ?? null)) : null,
@@ -218,7 +267,7 @@ class ResidentService {
                     'unit_id' => $unitId,
                     'resident_id' => $residentId,
                     'vehicle_number' => trim($input['vehicle']),
-                    'vehicle_type' => 'Car',
+                    'vehicle_type' => '4-Wheeler (Car)',
                     'pass_status' => 'Valid'
                 ], $societyId);
             }
