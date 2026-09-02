@@ -65,14 +65,23 @@ class VisitorService {
             $vehicleNumber = $input['vehicleNumber'] ?? ($input['vehicle_number'] ?? 'Walk-in');
             $photoUrl = $input['photoUrl'] ?? ($input['photo_url'] ?? null);
 
+            $explicitApproval = $input['approval_status'] ?? ($input['approvalStatus'] ?? null);
             $isPreApproved = !empty($input['isPreApproved']) || 
                              !empty($input['preApproved']) || 
-                             ($input['status'] ?? '') === 'Expected' || 
-                             ($input['approval_status'] ?? '') === 'Approved' || 
-                             ($input['approvalStatus'] ?? '') === 'Approved' ||
-                             !empty($input['isOwnerPreApproved']);
+                             !empty($input['is_quick_pass']) ||
+                             !empty($input['isOwnerPreApproved']) ||
+                             ($explicitApproval === 'Approved' || $explicitApproval === 'Auto-Approved');
+
+            // If explicitly requested as 'Pending' or 'Pending Approval', it is NEVER pre-approved
+            if ($explicitApproval === 'Pending Approval' || $explicitApproval === 'Pending') {
+                $isPreApproved = false;
+            }
+
             $initialApproval = $isPreApproved ? 'Approved' : 'Pending Approval';
-            $initialStatus = $isPreApproved ? 'Expected' : 'Waiting at Gate';
+            $initialStatus = $isPreApproved ? 'Expected' : ($input['status'] ?? 'Waiting at Gate');
+            if ($initialStatus === 'Expected' && !$isPreApproved) {
+                $initialStatus = 'Waiting at Gate';
+            }
             $initialCheckIn = $isPreApproved ? 'Expected / Pre-Approved' : ($input['checkInTime'] ?? 'Awaiting Entry');
 
             // 1. Resolve Unit & Occupant Notification Recipient
