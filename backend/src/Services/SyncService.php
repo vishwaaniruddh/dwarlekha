@@ -145,7 +145,21 @@ class SyncService {
     }
 
     public function importData(array $payload, string $mode = 'replace'): array {
-        $data = $payload['data'] ?? $payload;
+        // 1. Unpack nested payload wrappers if present
+        $data = $payload;
+        if (isset($data['data']) && is_array($data['data'])) {
+            $data = $data['data'];
+        }
+        if (isset($data['data']) && is_array($data['data'])) {
+            $data = $data['data'];
+        }
+
+        // 2. Remove any top-level metadata keys
+        $metadataKeys = ['version', 'exported_at', 'source_host', 'total_tables', 'total_rows', 'success', 'error', 'message'];
+        foreach ($metadataKeys as $k) {
+            unset($data[$k]);
+        }
+
         if (!is_array($data) || empty($data)) {
             throw new Exception("Invalid or empty sync data payload provided.");
         }
@@ -157,6 +171,10 @@ class SyncService {
         }
 
         try {
+            // Get actual existing tables in target database
+            $stmt = $db->query("SHOW TABLES");
+            $existingDbTables = $stmt->fetchAll(PDO::FETCH_COLUMN);
+
             // Disable foreign key checks for clean bulk synchronization
             $db->exec("SET FOREIGN_KEY_CHECKS = 0");
 
@@ -164,7 +182,7 @@ class SyncService {
             $totalInserted = 0;
 
             // Import according to ordered tables
-            $tablesToProcess = array_keys($data);
+            $tablesToProcess = array_intersect(array_keys($data), $existingDbTables);
             $ordered = [];
             foreach (self::ORDERED_TABLES as $t) {
                 if (in_array($t, $tablesToProcess)) {
@@ -181,9 +199,9 @@ class SyncService {
                 $rows = $data[$table] ?? [];
                 if (!is_array($rows)) continue;
 
-                // If mode is replace, truncate table
+                // If mode is replace, delete all rows safely within transaction
                 if ($mode === 'replace') {
-                    $db->exec("TRUNCATE TABLE `{$table}`");
+                    $db->exec("DELETE FROM `{$table}`");
                 }
 
                 $tableCount = 0;
@@ -217,7 +235,7 @@ class SyncService {
 
             $db->exec("SET FOREIGN_KEY_CHECKS = 1");
 
-            if ($manageTx) {
+            if ($manageTx && $db->inTransaction()) {
                 $db->commit();
             }
 
@@ -238,6 +256,8 @@ class SyncService {
     }
 
     public function pushToRemote(string $targetUrl, string $secretKey = ''): array {
+        // Auto-upgrade to HTTPS for live domain
+        $targetUrl = preg_replace('/^http:\/\/(dwarlekha\.sarsspl\.com)/i', 'https://$1', trim($targetUrl));
         $export = $this->exportData();
         $remoteEndpoint = rtrim($targetUrl, '/') . '/index.php?route=sync/import';
 
@@ -245,6 +265,9 @@ class SyncService {
         curl_setopt_array($ch, [
             CURLOPT_POST => true,
             CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS => 5,
+            CURLOPT_POSTREDIR => 3, // Keep POST payload across 301/302/307 redirects
             CURLOPT_HTTPHEADER => [
                 'Content-Type: application/json',
                 'X-Sync-Key: ' . ($secretKey ?: self::SYNC_SECRET)
@@ -254,8 +277,9 @@ class SyncService {
                 'mode' => 'replace',
                 'secret_key' => $secretKey ?: self::SYNC_SECRET
             ]),
-            CURLOPT_TIMEOUT => 120,
-            CURLOPT_SSL_VERIFYPEER => false
+            CURLOPT_TIMEOUT => 180,
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => false
         ]);
 
         $response = curl_exec($ch);
@@ -269,19 +293,24 @@ class SyncService {
 
         $result = json_decode($response, true);
         if ($httpCode !== 200 || empty($result['success'])) {
-            throw new Exception("Remote Server Error ({$httpCode}): " . ($result['error'] ?? $response));
+            throw new Exception("Remote Server Error ({$httpCode}): " . ($result['error'] ?? substr(strip_tags($response), 0, 300)));
         }
 
         return $result;
     }
 
     public function pullFromRemote(string $sourceUrl, string $secretKey = ''): array {
+        // Auto-upgrade to HTTPS for live domain
+        $sourceUrl = preg_replace('/^http:\/\/(dwarlekha\.sarsspl\.com)/i', 'https://$1', trim($sourceUrl));
         $remoteEndpoint = rtrim($sourceUrl, '/') . '/index.php?route=sync/export';
 
         $ch = curl_init($remoteEndpoint);
         curl_setopt_array($ch, [
             CURLOPT_POST => true,
             CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS => 5,
+            CURLOPT_POSTREDIR => 3, // Keep POST payload across 301/302/307 redirects
             CURLOPT_HTTPHEADER => [
                 'Content-Type: application/json',
                 'X-Sync-Key: ' . ($secretKey ?: self::SYNC_SECRET)
@@ -289,8 +318,9 @@ class SyncService {
             CURLOPT_POSTFIELDS => json_encode([
                 'secret_key' => $secretKey ?: self::SYNC_SECRET
             ]),
-            CURLOPT_TIMEOUT => 120,
-            CURLOPT_SSL_VERIFYPEER => false
+            CURLOPT_TIMEOUT => 180,
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => false
         ]);
 
         $response = curl_exec($ch);
@@ -304,7 +334,7 @@ class SyncService {
 
         $payload = json_decode($response, true);
         if ($httpCode !== 200 || empty($payload['data'])) {
-            throw new Exception("Remote Export Error ({$httpCode}): " . ($payload['error'] ?? $response));
+            throw new Exception("Remote Export Error ({$httpCode}): " . ($payload['error'] ?? substr(strip_tags($response), 0, 300)));
         }
 
         // Import downloaded data locally

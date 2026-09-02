@@ -8,7 +8,7 @@ class Cors {
             header("Access-Control-Allow-Origin: {$origin}");
             header("Access-Control-Allow-Credentials: true");
             header("Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS");
-            header("Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With, X-Society-ID, X-Tenant-ID");
+            header("Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With, X-Society-ID, X-Tenant-ID, X-Sync-Key, Accept, *");
             header("Content-Type: application/json; charset=UTF-8");
         }
 

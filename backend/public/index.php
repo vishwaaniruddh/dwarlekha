@@ -10,7 +10,7 @@ ini_set('display_errors', '0');
 // Global CORS Headers
 header("Access-Control-Allow-Origin: *");
 header("Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS");
-header("Access-Control-Allow-Headers: Content-Type, Authorization, X-Society-ID, Accept");
+header("Access-Control-Allow-Headers: Content-Type, Authorization, X-Society-ID, X-Tenant-ID, X-Sync-Key, Accept, *");
 
 if (($_SERVER['REQUEST_METHOD'] ?? '') === 'OPTIONS') {
     http_response_code(200);
