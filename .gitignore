@@ -1,0 +1,8 @@
+# Production Deployment .gitignore
+backend/public/uploads/*
+!backend/public/uploads/.gitkeep
+backend/public/uploads/helpdesk/*
+!backend/public/uploads/helpdesk/.gitkeep
+backend/logs/*
+!backend/logs/.gitkeep
+*.log

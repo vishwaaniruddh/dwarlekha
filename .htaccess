@@ -1,0 +1,16 @@
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+
+  # 1. Allow backend API routes and uploaded media to pass through
+  RewriteCond %{REQUEST_URI} ^/backend/ [NC]
+  RewriteRule ^ - [L]
+
+  # 2. If requested file or directory exists (assets, favicon, illustrations), serve it directly
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^ - [L]
+
+  # 3. Fallback all SPA routes to index.html for React Router / SPA navigation
+  RewriteRule ^ index.html [L]
+</IfModule>

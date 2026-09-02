@@ -1,0 +1,34 @@
+# ==========================================
+# Backend PHP .gitignore
+# ==========================================
+
+# Composer vendor directory
+/vendor/
+
+# Environment configurations
+.env
+.env.local
+.env.*.local
+*.env
+
+# Testing & Code Coverage
+/.phpunit.cache/
+.phpunit.result.cache
+/coverage/
+
+# Logs and Caches
+*.log
+/logs/
+/storage/logs/
+/storage/cache/
+
+# Local database dumps
+*.sql.bak
+*.dump
+*.tmp
+
+# Operating System & IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
