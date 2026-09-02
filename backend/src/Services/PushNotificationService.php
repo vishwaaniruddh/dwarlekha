@@ -148,4 +148,50 @@ class PushNotificationService {
 
         return $this->send($tokens, $title, $body, $payloadData, $societyId, $unitId);
     }
+
+    /**
+     * Notify security guard/gatekeeper when a resident Approves or Rejects a visitor
+     */
+    public function notifyGatekeeperDecision(array $visitor, bool $isApproved, int $societyId = 0): array {
+        $visitorName = $visitor['name'] ?? ($visitor['visitor_name'] ?? 'Visitor');
+        $flatVisiting = $visitor['flat_visiting'] ?? ($visitor['flatVisiting'] ?? 'Resident Unit');
+        $passCode = $visitor['visitor_code'] ?? ($visitor['pass_code'] ?? ($visitor['passCode'] ?? 'GATE-PASS'));
+        $decision = $isApproved ? 'Approved' : 'Denied';
+
+        // Query security guard and gatekeeper push tokens
+        $tokens = [];
+        $stmt = $this->db->prepare("SELECT u.push_token FROM users u 
+            JOIN roles r ON u.role_id = r.id 
+            WHERE (r.role_code LIKE '%guard%' OR r.role_code LIKE '%security%' OR r.role_code LIKE '%gate%')
+            AND u.push_token IS NOT NULL AND u.is_deleted = 0
+            AND (u.society_id = ? OR u.society_id IS NULL OR ? = 0)");
+        $stmt->execute([$societyId, $societyId]);
+        $tokens = array_merge($tokens, $stmt->fetchAll(PDO::FETCH_COLUMN));
+
+        $tokens = array_unique(array_filter($tokens));
+
+        $title = $isApproved 
+            ? "✅ Entry Approved: {$visitorName}" 
+            : "🛑 Entry Rejected: {$visitorName}";
+        
+        $body = $isApproved 
+            ? "Flat {$flatVisiting} APPROVED entry for {$visitorName}. You may allow them inside." 
+            : "Flat {$flatVisiting} REJECTED entry for {$visitorName}. Do NOT allow entry.";
+
+        $payloadData = [
+            'type' => 'gate_decision',
+            'decision' => $decision,
+            'is_approved' => $isApproved,
+            'visitor_id' => $visitor['id'] ?? null,
+            'visitor_code' => $passCode,
+            'visitor_name' => $visitorName,
+            'name' => $visitorName,
+            'flat_visiting' => $flatVisiting,
+            'flat_number' => $flatVisiting,
+            'photo_url' => $visitor['photo_url'] ?? ($visitor['photoUrl'] ?? null),
+            'timestamp' => time()
+        ];
+
+        return $this->send($tokens, $title, $body, $payloadData, $societyId);
+    }
 }

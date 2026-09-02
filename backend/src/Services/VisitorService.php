@@ -218,11 +218,28 @@ class VisitorService {
         }
 
         try {
+            $vis = $this->visitorModel->findByCode($visitorCode, 0);
+            if (!$vis && is_numeric($visitorCode)) {
+                $vis = $this->visitorModel->findById((int)$visitorCode);
+            }
+
             $result = $this->visitorModel->updateApprovalStatus($visitorCode, 'Approved', 'Waiting at Gate');
 
             if ($manageTx) {
                 $db->commit();
             }
+
+            // Dispatch push notification to Security Guard / Gatekeeper
+            if ($vis) {
+                try {
+                    $pushService = new PushNotificationService();
+                    $societyId = !empty($vis['society_id']) ? (int)$vis['society_id'] : 0;
+                    $pushService->notifyGatekeeperDecision($vis, true, $societyId);
+                } catch (\Throwable $pe) {
+                    // Non-blocking notification dispatch
+                }
+            }
+
             return $result;
         } catch (\Throwable $e) {
             if ($manageTx && $db->inTransaction()) {
@@ -240,11 +257,28 @@ class VisitorService {
         }
 
         try {
+            $vis = $this->visitorModel->findByCode($visitorCode, 0);
+            if (!$vis && is_numeric($visitorCode)) {
+                $vis = $this->visitorModel->findById((int)$visitorCode);
+            }
+
             $result = $this->visitorModel->updateApprovalStatus($visitorCode, 'Denied', 'Denied Entry');
 
             if ($manageTx) {
                 $db->commit();
             }
+
+            // Dispatch push notification to Security Guard / Gatekeeper
+            if ($vis) {
+                try {
+                    $pushService = new PushNotificationService();
+                    $societyId = !empty($vis['society_id']) ? (int)$vis['society_id'] : 0;
+                    $pushService->notifyGatekeeperDecision($vis, false, $societyId);
+                } catch (\Throwable $pe) {
+                    // Non-blocking notification dispatch
+                }
+            }
+
             return $result;
         } catch (\Throwable $e) {
             if ($manageTx && $db->inTransaction()) {
