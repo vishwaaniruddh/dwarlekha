@@ -25,6 +25,7 @@ use App\Controllers\AuditLogController;
 use App\Controllers\UploadController;
 use App\Controllers\PushNotificationController;
 use App\Controllers\VehicleController;
+use App\Controllers\SyncController;
 
 class Router {
     public function dispatch(): void {
@@ -482,6 +483,25 @@ class Router {
                         $ctrl->getCities();
                     } else {
                         $ctrl->getGeoLookup();
+                    }
+                    break;
+
+                // 13. High-Speed Database Data Sync Operation (Private Endpoint)
+                case 'sync':
+                case 'sync-operation':
+                    $ctrl = new SyncController();
+                    if ($action === 'status') {
+                        $ctrl->status();
+                    } elseif ($action === 'export') {
+                        $ctrl->export();
+                    } elseif ($action === 'import') {
+                        $ctrl->import();
+                    } elseif ($action === 'push' || $action === 'push-remote') {
+                        $ctrl->pushRemote();
+                    } elseif ($action === 'pull' || $action === 'pull-remote') {
+                        $ctrl->pullRemote();
+                    } else {
+                        $ctrl->status();
                     }
                     break;
 
