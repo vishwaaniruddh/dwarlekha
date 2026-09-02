@@ -113,6 +113,8 @@ class Unit extends BaseModel {
 
     public function findByCode(string $code, ?int $societyId = null): ?array {
         $societyId = ($societyId !== null) ? $societyId : $this->getSocietyId();
+        $clean = trim($code);
+
         $sql = "SELECT u.*, t.name AS tower_name,
             COALESCE(
                 (SELECT usr.full_name FROM residents r JOIN users usr ON r.user_id = usr.id WHERE r.unit_id = u.id AND r.resident_type = 'Owner' AND r.is_deleted = 0 ORDER BY r.id DESC LIMIT 1),
@@ -132,13 +134,13 @@ class Unit extends BaseModel {
             ) AS resolved_tenant_name
             FROM units u 
             JOIN towers t ON u.tower_id = t.id 
-            WHERE (
-                u.unit_code = ? 
-                OR UPPER(REPLACE(REPLACE(REPLACE(u.unit_code, '-', ''), ' ', ''), '_', '')) = UPPER(REPLACE(REPLACE(REPLACE(?, '-', ''), ' ', ''), '_', ''))
-            )
+            WHERE (u.unit_code = ? OR u.unit_code = ? OR u.unit_code LIKE ?)
             AND u.is_deleted = 0";
 
-        $params = [$code, $code];
+        // Generate clean variants (e.g. C-106, C106, C 106)
+        $altCode = str_replace(['-', ' ', '_'], '', $clean);
+        $params = [$clean, $altCode, "%{$clean}%"];
+
         if ($societyId > 0) {
             $sql .= " AND u.society_id = ?";
             $params[] = $societyId;
