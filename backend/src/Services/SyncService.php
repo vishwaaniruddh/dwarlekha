@@ -6,7 +6,7 @@ use Exception;
 use PDO;
 
 class SyncService {
-    private const SYNC_SECRET = 'DwarLekha@Sync2026';
+    public const SYNC_SECRET = 'DwarLekha@Sync2026';
 
     // Canonical list of tables in dependency order
     private const ORDERED_TABLES = [
