@@ -20,6 +20,18 @@ class SyncController extends BaseController {
         }
     }
 
+    public function compare(): void {
+        try {
+            $input = $this->getJsonInput();
+            $remoteUrl = $input['remote_url'] ?? $_GET['remote_url'] ?? 'https://dwarlekha.sarsspl.com/backend/public';
+            $secretKey = $input['secret_key'] ?? $_GET['secret_key'] ?? '';
+            $result = $this->syncService->getComparison($remoteUrl, $secretKey);
+            $this->success($result);
+        } catch (Exception $e) {
+            $this->error($e->getMessage(), 500);
+        }
+    }
+
     public function export(): void {
         try {
             $input = $this->getJsonInput();
@@ -47,7 +59,14 @@ class SyncController extends BaseController {
             $input = $this->getJsonInput();
             $targetUrl = $input['target_url'] ?? 'http://dwarlekha.sarsspl.com/backend/public';
             $secretKey = $input['secret_key'] ?? '';
-            $result = $this->syncService->pushToRemote($targetUrl, $secretKey);
+            $tables = $input['tables'] ?? [];
+            $mode = $input['mode'] ?? 'replace';
+            $result = $this->syncService->pushToRemote(
+                $targetUrl, 
+                $secretKey, 
+                is_array($tables) ? $tables : [], 
+                $mode
+            );
             $this->success($result, "Database pushed and synchronized to remote server successfully.");
         } catch (Exception $e) {
             $this->error($e->getMessage(), 500);
@@ -59,7 +78,14 @@ class SyncController extends BaseController {
             $input = $this->getJsonInput();
             $sourceUrl = $input['source_url'] ?? 'http://dwarlekha.sarsspl.com/backend/public';
             $secretKey = $input['secret_key'] ?? '';
-            $result = $this->syncService->pullFromRemote($sourceUrl, $secretKey);
+            $tables = $input['tables'] ?? [];
+            $mode = $input['mode'] ?? 'replace';
+            $result = $this->syncService->pullFromRemote(
+                $sourceUrl, 
+                $secretKey, 
+                is_array($tables) ? $tables : [], 
+                $mode
+            );
             $this->success($result, "Database pulled from remote server and updated locally successfully.");
         } catch (Exception $e) {
             $this->error($e->getMessage(), 500);

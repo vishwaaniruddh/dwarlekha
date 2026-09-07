@@ -43,7 +43,58 @@ class SyncService {
         'vendors'
     ];
 
+    public function ensureEssentialTablesExist(): void {
+        try {
+            $db = Database::getConnection();
+            $db->exec("
+                CREATE TABLE IF NOT EXISTS `smtp_configs` (
+                    `id` int(11) NOT NULL AUTO_INCREMENT,
+                    `society_id` int(11) NOT NULL,
+                    `sender_name` varchar(150) NOT NULL DEFAULT 'Society Management Office',
+                    `sender_email` varchar(150) NOT NULL,
+                    `reply_to_email` varchar(150) DEFAULT NULL,
+                    `smtp_host` varchar(255) NOT NULL,
+                    `smtp_port` int(11) NOT NULL DEFAULT 587,
+                    `smtp_encryption` enum('tls','ssl','none') NOT NULL DEFAULT 'tls',
+                    `smtp_username` varchar(255) NOT NULL,
+                    `smtp_password` text NOT NULL,
+                    `is_active` tinyint(1) NOT NULL DEFAULT 1,
+                    `last_tested_at` timestamp NULL DEFAULT NULL,
+                    `last_test_status` enum('pending','success','failed') NOT NULL DEFAULT 'pending',
+                    `last_test_error` text DEFAULT NULL,
+                    `is_deleted` tinyint(1) NOT NULL DEFAULT 0,
+                    `deleted_at` timestamp NULL DEFAULT NULL,
+                    `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+                    `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+                    PRIMARY KEY (`id`),
+                    KEY `idx_society_smtp` (`society_id`,`is_deleted`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            ");
+            $db->exec("
+                CREATE TABLE IF NOT EXISTS `email_logs` (
+                    `id` int(11) NOT NULL AUTO_INCREMENT,
+                    `society_id` int(11) NOT NULL,
+                    `recipient_email` varchar(255) NOT NULL,
+                    `recipient_name` varchar(150) DEFAULT NULL,
+                    `subject` varchar(255) NOT NULL,
+                    `body_html` longtext DEFAULT NULL,
+                    `body_text` text DEFAULT NULL,
+                    `status` enum('sent','failed','queued') NOT NULL DEFAULT 'sent',
+                    `error_message` text DEFAULT NULL,
+                    `sent_at` timestamp NULL DEFAULT NULL,
+                    `is_deleted` tinyint(1) NOT NULL DEFAULT 0,
+                    `deleted_at` timestamp NULL DEFAULT NULL,
+                    `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+                    PRIMARY KEY (`id`),
+                    KEY `idx_email_society` (`society_id`,`is_deleted`),
+                    KEY `idx_email_status` (`status`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            ");
+        } catch (\Throwable $e) {}
+    }
+
     public function getStatus(): array {
+        $this->ensureEssentialTablesExist();
         $db = Database::getConnection();
         $isLocal = (
             php_sapi_name() === 'cli' && (PHP_OS_FAMILY === 'Windows')
@@ -125,9 +176,18 @@ class SyncService {
         }
 
         $dump = [];
+        $schemas = [];
         $totalExportedRows = 0;
 
         foreach ($ordered as $table) {
+            try {
+                $createStmt = $db->query("SHOW CREATE TABLE `{$table}`");
+                $createRow = $createStmt->fetch(PDO::FETCH_NUM);
+                if (!empty($createRow[1])) {
+                    $schemas[$table] = $createRow[1];
+                }
+            } catch (\Throwable $e) {}
+
             $rowsStmt = $db->query("SELECT * FROM `{$table}`");
             $rows = $rowsStmt->fetchAll(PDO::FETCH_ASSOC);
             $dump[$table] = $rows;
@@ -140,6 +200,7 @@ class SyncService {
             'source_host' => $_SERVER['HTTP_HOST'] ?? 'localhost',
             'total_tables' => count($dump),
             'total_rows' => $totalExportedRows,
+            'schemas' => $schemas,
             'data' => $dump
         ];
     }
@@ -147,7 +208,11 @@ class SyncService {
     public function importData(array $payload, string $mode = 'replace'): array {
         // 1. Unpack nested payload wrappers if present
         $data = $payload;
+        $schemas = $payload['schemas'] ?? [];
         if (isset($data['data']) && is_array($data['data'])) {
+            if (isset($data['schemas']) && is_array($data['schemas'])) {
+                $schemas = array_merge($schemas, $data['schemas']);
+            }
             $data = $data['data'];
         }
         if (isset($data['data']) && is_array($data['data'])) {
@@ -155,7 +220,7 @@ class SyncService {
         }
 
         // 2. Remove any top-level metadata keys
-        $metadataKeys = ['version', 'exported_at', 'source_host', 'total_tables', 'total_rows', 'success', 'error', 'message'];
+        $metadataKeys = ['version', 'exported_at', 'source_host', 'total_tables', 'total_rows', 'success', 'error', 'message', 'schemas'];
         foreach ($metadataKeys as $k) {
             unset($data[$k]);
         }
@@ -172,11 +237,28 @@ class SyncService {
 
         try {
             // Get actual existing tables in target database
-            $stmt = $db->query("SHOW TABLES");
-            $existingDbTables = $stmt->fetchAll(PDO::FETCH_COLUMN);
+            $this->ensureEssentialTablesExist();
 
-            // Disable foreign key checks for clean bulk synchronization
+            // Disable foreign key checks for clean bulk synchronization & table creation
             $db->exec("SET FOREIGN_KEY_CHECKS = 0");
+
+            // Auto-create any missing tables if DDL schema was provided in payload
+            if (!empty($schemas) && is_array($schemas)) {
+                foreach ($schemas as $tblName => $ddl) {
+                    if (!in_array($tblName, $existingDbTables) && !empty($ddl)) {
+                        try {
+                            $db->exec($ddl);
+                            $existingDbTables[] = $tblName;
+                        } catch (\Throwable $ignored) {
+                            try {
+                                $cleanDdl = preg_replace('/AUTO_INCREMENT=\d+/i', '', $ddl);
+                                $db->exec($cleanDdl);
+                                $existingDbTables[] = $tblName;
+                            } catch (\Throwable $e2) {}
+                        }
+                    }
+                }
+            }
 
             $importedStats = [];
             $totalInserted = 0;
@@ -255,10 +337,10 @@ class SyncService {
         }
     }
 
-    public function pushToRemote(string $targetUrl, string $secretKey = ''): array {
+    public function pushToRemote(string $targetUrl, string $secretKey = '', array $tables = [], string $mode = 'replace'): array {
         // Auto-upgrade to HTTPS for live domain
         $targetUrl = preg_replace('/^http:\/\/(dwarlekha\.sarsspl\.com)/i', 'https://$1', trim($targetUrl));
-        $export = $this->exportData();
+        $export = $this->exportData($tables);
         $remoteEndpoint = rtrim($targetUrl, '/') . '/index.php?route=sync/import';
 
         $ch = curl_init($remoteEndpoint);
@@ -274,7 +356,8 @@ class SyncService {
             ],
             CURLOPT_POSTFIELDS => json_encode([
                 'data' => $export['data'],
-                'mode' => 'replace',
+                'schemas' => $export['schemas'] ?? [],
+                'mode' => $mode,
                 'secret_key' => $secretKey ?: self::SYNC_SECRET
             ]),
             CURLOPT_TIMEOUT => 180,
@@ -299,7 +382,7 @@ class SyncService {
         return $result;
     }
 
-    public function pullFromRemote(string $sourceUrl, string $secretKey = ''): array {
+    public function pullFromRemote(string $sourceUrl, string $secretKey = '', array $tables = [], string $mode = 'replace'): array {
         // Auto-upgrade to HTTPS for live domain
         $sourceUrl = preg_replace('/^http:\/\/(dwarlekha\.sarsspl\.com)/i', 'https://$1', trim($sourceUrl));
         $remoteEndpoint = rtrim($sourceUrl, '/') . '/index.php?route=sync/export';
@@ -316,7 +399,8 @@ class SyncService {
                 'X-Sync-Key: ' . ($secretKey ?: self::SYNC_SECRET)
             ],
             CURLOPT_POSTFIELDS => json_encode([
-                'secret_key' => $secretKey ?: self::SYNC_SECRET
+                'secret_key' => $secretKey ?: self::SYNC_SECRET,
+                'tables' => $tables
             ]),
             CURLOPT_TIMEOUT => 180,
             CURLOPT_SSL_VERIFYPEER => false,
@@ -338,6 +422,130 @@ class SyncService {
         }
 
         // Import downloaded data locally
-        return $this->importData($payload, 'replace');
+        return $this->importData($payload, $mode);
+    }
+
+    public function getComparison(string $remoteUrl, string $secretKey = ''): array {
+        $localStatus = $this->getStatus();
+        $localTables = [];
+        foreach ($localStatus['tables'] as $t) {
+            $localTables[$t['name']] = $t;
+        }
+
+        // Auto-upgrade to HTTPS for live domain
+        $remoteUrl = preg_replace('/^http:\/\/(dwarlekha\.sarsspl\.com)/i', 'https://$1', trim($remoteUrl));
+        $remoteEndpoint = rtrim($remoteUrl, '/') . '/index.php?route=sync/status';
+
+        $ch = curl_init($remoteEndpoint);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS => 5,
+            CURLOPT_HTTPHEADER => [
+                'Accept: application/json',
+                'X-Sync-Key: ' . ($secretKey ?: self::SYNC_SECRET)
+            ],
+            CURLOPT_TIMEOUT => 30,
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => false
+        ]);
+
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlError = curl_error($ch);
+        curl_close($ch);
+
+        if ($curlError) {
+            throw new Exception("Unable to reach remote server: " . $curlError);
+        }
+
+        $remoteData = json_decode($response, true);
+        if ($httpCode !== 200 || empty($remoteData['success']) || empty($remoteData['data']['tables'])) {
+            throw new Exception("Failed to fetch remote server status ({$httpCode}): " . ($remoteData['error'] ?? substr(strip_tags($response), 0, 300)));
+        }
+
+        $remoteTables = [];
+        foreach ($remoteData['data']['tables'] as $t) {
+            $remoteTables[$t['name']] = $t;
+        }
+
+        // All table names union
+        $allTableNames = array_unique(array_merge(array_keys($localTables), array_keys($remoteTables)));
+
+        // Preserve order based on ORDERED_TABLES first, then others
+        $ordered = [];
+        foreach (self::ORDERED_TABLES as $t) {
+            if (in_array($t, $allTableNames)) {
+                $ordered[] = $t;
+            }
+        }
+        foreach ($allTableNames as $t) {
+            if (!in_array($t, $ordered)) {
+                $ordered[] = $t;
+            }
+        }
+
+        $comparison = [];
+        $inSyncCount = 0;
+        $mismatchCount = 0;
+        $missingOnRemoteCount = 0;
+        $missingOnLocalCount = 0;
+
+        foreach ($ordered as $tbl) {
+            $hasLocal = isset($localTables[$tbl]);
+            $hasRemote = isset($remoteTables[$tbl]);
+
+            $localCount = $hasLocal ? (int)$localTables[$tbl]['total_count'] : 0;
+            $remoteCount = $hasRemote ? (int)$remoteTables[$tbl]['total_count'] : 0;
+            $localActive = $hasLocal ? (int)$localTables[$tbl]['active_count'] : 0;
+            $remoteActive = $hasRemote ? (int)$remoteTables[$tbl]['active_count'] : 0;
+
+            if (!$hasRemote) {
+                $status = 'missing_on_remote';
+                $missingOnRemoteCount++;
+            } elseif (!$hasLocal) {
+                $status = 'missing_on_local';
+                $missingOnLocalCount++;
+            } elseif ($localCount !== $remoteCount) {
+                $status = 'count_mismatch';
+                $mismatchCount++;
+            } else {
+                $status = 'in_sync';
+                $inSyncCount++;
+            }
+
+            $comparison[] = [
+                'name' => $tbl,
+                'table' => $tbl,
+                'status' => $status,
+                'has_local' => $hasLocal,
+                'has_remote' => $hasRemote,
+                'local_count' => $localCount,
+                'remote_count' => $remoteCount,
+                'local_active' => $localActive,
+                'remote_active' => $remoteActive,
+                'diff' => $localCount - $remoteCount,
+                'is_core' => in_array($tbl, self::ORDERED_TABLES)
+            ];
+        }
+
+        return [
+            'summary' => [
+                'total_unique_tables' => count($ordered),
+                'in_sync' => $inSyncCount,
+                'count_mismatch' => $mismatchCount,
+                'missing_on_remote' => $missingOnRemoteCount,
+                'missing_on_local' => $missingOnLocalCount,
+                'local_total_records' => $localStatus['total_records'] ?? 0,
+                'remote_total_records' => $remoteData['data']['total_records'] ?? 0,
+                'local_tables_count' => count($localTables),
+                'remote_tables_count' => count($remoteTables),
+                'remote_host' => $remoteData['data']['host'] ?? '',
+                'remote_database' => $remoteData['data']['database'] ?? '',
+                'remote_environment' => $remoteData['data']['environment'] ?? '',
+                'remote_time' => $remoteData['data']['server_time'] ?? ''
+            ],
+            'tables' => $comparison
+        ];
     }
 }

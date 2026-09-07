@@ -14,6 +14,56 @@ class MailService {
 
     public function __construct(?PDO $db = null) {
         $this->db = $db ?? Database::getConnection();
+        $this->ensureTablesExist();
+    }
+
+    public function ensureTablesExist(): void {
+        try {
+            $this->db->exec("
+                CREATE TABLE IF NOT EXISTS `smtp_configs` (
+                    `id` int(11) NOT NULL AUTO_INCREMENT,
+                    `society_id` int(11) NOT NULL,
+                    `sender_name` varchar(150) NOT NULL DEFAULT 'Society Management Office',
+                    `sender_email` varchar(150) NOT NULL,
+                    `reply_to_email` varchar(150) DEFAULT NULL,
+                    `smtp_host` varchar(255) NOT NULL,
+                    `smtp_port` int(11) NOT NULL DEFAULT 587,
+                    `smtp_encryption` enum('tls','ssl','none') NOT NULL DEFAULT 'tls',
+                    `smtp_username` varchar(255) NOT NULL,
+                    `smtp_password` text NOT NULL,
+                    `is_active` tinyint(1) NOT NULL DEFAULT 1,
+                    `last_tested_at` timestamp NULL DEFAULT NULL,
+                    `last_test_status` enum('pending','success','failed') NOT NULL DEFAULT 'pending',
+                    `last_test_error` text DEFAULT NULL,
+                    `is_deleted` tinyint(1) NOT NULL DEFAULT 0,
+                    `deleted_at` timestamp NULL DEFAULT NULL,
+                    `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+                    `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+                    PRIMARY KEY (`id`),
+                    KEY `idx_society_smtp` (`society_id`,`is_deleted`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            ");
+            $this->db->exec("
+                CREATE TABLE IF NOT EXISTS `email_logs` (
+                    `id` int(11) NOT NULL AUTO_INCREMENT,
+                    `society_id` int(11) NOT NULL,
+                    `recipient_email` varchar(255) NOT NULL,
+                    `recipient_name` varchar(150) DEFAULT NULL,
+                    `subject` varchar(255) NOT NULL,
+                    `body_html` longtext DEFAULT NULL,
+                    `body_text` text DEFAULT NULL,
+                    `status` enum('sent','failed','queued') NOT NULL DEFAULT 'sent',
+                    `error_message` text DEFAULT NULL,
+                    `sent_at` timestamp NULL DEFAULT NULL,
+                    `is_deleted` tinyint(1) NOT NULL DEFAULT 0,
+                    `deleted_at` timestamp NULL DEFAULT NULL,
+                    `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+                    PRIMARY KEY (`id`),
+                    KEY `idx_email_society` (`society_id`,`is_deleted`),
+                    KEY `idx_email_status` (`status`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            ");
+        } catch (\Throwable $e) {}
     }
 
     /**

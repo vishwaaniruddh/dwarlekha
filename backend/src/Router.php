@@ -519,6 +519,8 @@ class Router {
                     $ctrl = new SyncController();
                     if ($action === 'status') {
                         $ctrl->status();
+                    } elseif ($action === 'compare') {
+                        $ctrl->compare();
                     } elseif ($action === 'export') {
                         $ctrl->export();
                     } elseif ($action === 'import') {
