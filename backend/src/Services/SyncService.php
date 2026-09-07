@@ -564,9 +564,54 @@ class SyncService {
     }
 
     public function getTableSchema(string $table): string {
+        if ($table === 'all' || $table === 'all_missing' || $table === 'missing') {
+            return $this->getMissingSql();
+        }
         $db = Database::getConnection();
         $stmt = $db->query("SHOW CREATE TABLE `{$table}`");
         $row = $stmt ? $stmt->fetch(PDO::FETCH_NUM) : null;
         return $row[1] ?? '';
     }
+
+    public function getMissingSql(): string {
+        $db = Database::getConnection();
+        $sql = "-- ======================================================\n";
+        $sql .= "-- DwarLekha Missing Tables & Columns Migration Script\n";
+        $sql .= "-- Execute in Hostinger phpMyAdmin (u444388293_dwarlekha)\n";
+        $sql .= "-- ======================================================\n\n";
+        $sql .= "SET FOREIGN_KEY_CHECKS = 0;\n\n";
+
+        // 1. smtp_configs
+        try {
+            $stmt = $db->query("SHOW CREATE TABLE `smtp_configs`");
+            $row = $stmt ? $stmt->fetch(PDO::FETCH_NUM) : null;
+            if (!empty($row[1])) {
+                $createSql = preg_replace('/CREATE TABLE/i', 'CREATE TABLE IF NOT EXISTS', $row[1], 1);
+                $sql .= "-- 1. Table: smtp_configs\n" . $createSql . ";\n\n";
+            }
+        } catch (\Throwable $e) {}
+
+        // 2. email_logs
+        try {
+            $stmt = $db->query("SHOW CREATE TABLE `email_logs`");
+            $row = $stmt ? $stmt->fetch(PDO::FETCH_NUM) : null;
+            if (!empty($row[1])) {
+                $createSql = preg_replace('/CREATE TABLE/i', 'CREATE TABLE IF NOT EXISTS', $row[1], 1);
+                $sql .= "-- 2. Table: email_logs\n" . $createSql . ";\n\n";
+            }
+        } catch (\Throwable $e) {}
+
+        // 3. societies missing columns
+        $sql .= "-- 3. Columns: Add missing columns to societies table\n";
+        $sql .= "ALTER TABLE `societies`\n";
+        $sql .= "  ADD COLUMN IF NOT EXISTS `legal_name` varchar(255) DEFAULT NULL AFTER `name`,\n";
+        $sql .= "  ADD COLUMN IF NOT EXISTS `bank_name` varchar(150) DEFAULT NULL AFTER `logo_url`,\n";
+        $sql .= "  ADD COLUMN IF NOT EXISTS `bank_account_no` varchar(50) DEFAULT NULL AFTER `bank_name`,\n";
+        $sql .= "  ADD COLUMN IF NOT EXISTS `bank_ifsc` varchar(20) DEFAULT NULL AFTER `bank_account_no`,\n";
+        $sql .= "  ADD COLUMN IF NOT EXISTS `upi_vpa` varchar(100) DEFAULT NULL AFTER `bank_ifsc`;\n\n";
+
+        $sql .= "SET FOREIGN_KEY_CHECKS = 1;\n";
+        return $sql;
+    }
 }
+
