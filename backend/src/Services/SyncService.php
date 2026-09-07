@@ -90,6 +90,11 @@ class SyncService {
                     KEY `idx_email_status` (`status`)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
             ");
+
+            // Auto-add legal_name to societies table if missing
+            try {
+                $db->exec("ALTER TABLE `societies` ADD COLUMN `legal_name` VARCHAR(150) NULL AFTER `name`");
+            } catch (\Throwable $e) {}
         } catch (\Throwable $e) {}
     }
 
@@ -281,6 +286,11 @@ class SyncService {
                 $rows = $data[$table] ?? [];
                 if (!is_array($rows)) continue;
 
+                // Query existing columns in target database to ensure schema compatibility
+                $colStmt = $db->query("SHOW COLUMNS FROM `{$table}`");
+                $targetColumns = $colStmt->fetchAll(PDO::FETCH_COLUMN);
+                $targetColMap = array_flip($targetColumns);
+
                 // If mode is replace, delete all rows safely within transaction
                 if ($mode === 'replace') {
                     $db->exec("DELETE FROM `{$table}`");
@@ -292,7 +302,11 @@ class SyncService {
                     foreach ($rows as $row) {
                         if (!is_array($row) || empty($row)) continue;
 
-                        $columns = array_keys($row);
+                        // Only insert columns that exist on the target table
+                        $filteredRow = array_intersect_key($row, $targetColMap);
+                        if (empty($filteredRow)) continue;
+
+                        $columns = array_keys($filteredRow);
                         $colList = implode('`, `', $columns);
                         $placeholders = implode(', ', array_fill(0, count($columns), '?'));
 
@@ -306,7 +320,7 @@ class SyncService {
                                 ON DUPLICATE KEY UPDATE {$updateStr}";
 
                         $stmt = $db->prepare($sql);
-                        $stmt->execute(array_values($row));
+                        $stmt->execute(array_values($filteredRow));
                         $tableCount++;
                         $totalInserted++;
                     }
