@@ -562,4 +562,11 @@ class SyncService {
             'tables' => $comparison
         ];
     }
+
+    public function getTableSchema(string $table): string {
+        $db = Database::getConnection();
+        $stmt = $db->query("SHOW CREATE TABLE `{$table}`");
+        $row = $stmt ? $stmt->fetch(PDO::FETCH_NUM) : null;
+        return $row[1] ?? '';
+    }
 }

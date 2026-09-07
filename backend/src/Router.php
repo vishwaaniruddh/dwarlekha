@@ -521,6 +521,8 @@ class Router {
                         $ctrl->status();
                     } elseif ($action === 'compare') {
                         $ctrl->compare();
+                    } elseif ($action === 'schema') {
+                        $ctrl->schema();
                     } elseif ($action === 'export') {
                         $ctrl->export();
                     } elseif ($action === 'import') {

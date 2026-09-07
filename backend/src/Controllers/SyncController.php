@@ -32,6 +32,19 @@ class SyncController extends BaseController {
         }
     }
 
+    public function schema(): void {
+        try {
+            $table = $_GET['table'] ?? '';
+            if (empty($table)) {
+                throw new Exception("Table name parameter required");
+            }
+            $schema = $this->syncService->getTableSchema($table);
+            $this->success(['table' => $table, 'schema' => $schema]);
+        } catch (Exception $e) {
+            $this->error($e->getMessage(), 400);
+        }
+    }
+
     public function export(): void {
         try {
             $input = $this->getJsonInput();
