@@ -47,6 +47,23 @@ class TenantService {
         }
 
         try {
+            // 1. Check if an active society is already using this unique code
+            $activeStmt = $db->prepare("SELECT id FROM societies WHERE society_code = ? AND is_deleted = 0 LIMIT 1");
+            $activeStmt->execute([$code]);
+            if ($activeStmt->fetch()) {
+                throw new InvalidArgumentException("A society with code '{$code}' already exists. Please choose a different code.");
+            }
+
+            // 2. If any soft-deleted society exists with this code, release it so unique keys never collide
+            $delStmt = $db->prepare("SELECT id, society_code FROM societies WHERE society_code = ? AND is_deleted = 1");
+            $delStmt->execute([$code]);
+            $delRows = $delStmt->fetchAll();
+            foreach ($delRows as $dRow) {
+                $releaseStmt = $db->prepare("UPDATE societies SET society_code = CONCAT(society_code, '_DEL_', id, '_', UNIX_TIMESTAMP()) WHERE id = ?");
+                $releaseStmt->execute([$dRow['id']]);
+            }
+
+            // 3. Create the new society with total_units starting dynamically at 0
             $id = $this->societyModel->create([
                 'society_code' => $code,
                 'name' => $name,
@@ -67,7 +84,7 @@ class TenantService {
                 'timezone' => $input['timezone'] ?? 'Asia/Kolkata',
                 'is_active' => isset($input['is_active']) ? (int)$input['is_active'] : (isset($input['isActive']) ? (int)$input['isActive'] : 1),
                 'tagline' => $input['tagline'] ?? 'Smart Connected Living',
-                'total_units' => (int)($input['total_units'] ?? ($input['totalUnits'] ?? 100))
+                'total_units' => 0
             ]);
 
             $society = $this->societyModel->findById($id);
@@ -155,11 +172,17 @@ class TenantService {
             if (isset($input['is_active']) || isset($input['isActive'])) {
                 $updateData['is_active'] = (int)($input['is_active'] ?? $input['isActive']);
             }
-            if (isset($input['total_units']) || isset($input['totalUnits'])) {
-                $updateData['total_units'] = (int)($input['total_units'] ?? $input['totalUnits']);
-            }
             if (!empty($input['society_code']) || !empty($input['societyCode'])) {
-                $updateData['society_code'] = strtoupper(trim($input['society_code'] ?? $input['societyCode']));
+                $newCode = strtoupper(trim($input['society_code'] ?? $input['societyCode']));
+                if ($newCode !== $existing['society_code']) {
+                    // Check active unique
+                    $check = $db->prepare("SELECT id FROM societies WHERE society_code = ? AND id != ? AND is_deleted = 0 LIMIT 1");
+                    $check->execute([$newCode, $id]);
+                    if ($check->fetch()) {
+                        throw new InvalidArgumentException("Society code '{$newCode}' is already taken by another active society.");
+                    }
+                    $updateData['society_code'] = $newCode;
+                }
             }
 
             $this->societyModel->update($id, $updateData);
@@ -184,6 +207,56 @@ class TenantService {
             }
 
             return $updated;
+        } catch (\Throwable $e) {
+            if ($manageTx && $db->inTransaction()) {
+                $db->rollBack();
+            }
+            throw $e;
+        }
+    }
+
+    public function deleteSociety(int $id): bool {
+        $db = Database::getConnection();
+        $manageTx = !$db->inTransaction();
+        if ($manageTx) {
+            $db->beginTransaction();
+        }
+
+        try {
+            $soc = $this->societyModel->findById($id);
+            if (!$soc) {
+                throw new Exception("Society not found.");
+            }
+
+            // Release unique code by suffixing with _DEL_<id>_<timestamp> so it can be re-created anytime
+            $releasedCode = $soc['society_code'] . '_DEL_' . $id . '_' . time();
+            $stmt = $db->prepare("UPDATE societies SET society_code = ?, is_deleted = 1, deleted_at = NOW() WHERE id = ?");
+            $stmt->execute([$releasedCode, $id]);
+
+            // Cascade soft-delete to linked towers and units
+            $db->prepare("UPDATE towers SET is_deleted = 1, deleted_at = NOW() WHERE society_id = ?")->execute([$id]);
+            $db->prepare("UPDATE units SET is_deleted = 1, deleted_at = NOW() WHERE society_id = ?")->execute([$id]);
+
+            // Audit log
+            $currentUser = \App\Config\RbacGuard::getCurrentUser();
+            $actorName = $currentUser['name'] ?? 'Master Admin';
+            $ip = $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
+            $auditStmt = $db->prepare("INSERT INTO `audit_logs` (`society_id`, `action`, `entity_type`, `entity_id`, `actor_name`, `ip_address`, `details`) VALUES (?, ?, ?, ?, ?, ?, ?)");
+            $auditStmt->execute([
+                $id,
+                'SOCIETY_DELETED',
+                'societies',
+                $soc['society_code'],
+                $actorName,
+                $ip,
+                json_encode(['deleted_society_id' => $id, 'original_code' => $soc['society_code']], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
+            ]);
+
+            if ($manageTx) {
+                $db->commit();
+            }
+
+            return true;
         } catch (\Throwable $e) {
             if ($manageTx && $db->inTransaction()) {
                 $db->rollBack();

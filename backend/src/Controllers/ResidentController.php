@@ -23,6 +23,20 @@ class ResidentController extends BaseController {
         $this->success($residents);
     }
 
+    public function me(): void {
+        $currUser = \App\Config\RbacGuard::getCurrentUser();
+        if (!$currUser) {
+            $this->error("Unauthorized session", 401);
+            return;
+        }
+        $resident = $this->residentService->getMyResidentPassport($currUser);
+        if (!$resident) {
+            $this->error("No resident record found for current user account", 404);
+            return;
+        }
+        $this->success($resident);
+    }
+
     public function show(int $id): void {
         $resident = $this->residentService->getResidentPassport($id);
         if (!$resident) {
@@ -92,6 +106,18 @@ class ResidentController extends BaseController {
         try {
             $this->residentService->deleteDocument($docId);
             $this->success(null, "Document removed successfully");
+        } catch (Exception $e) {
+            $this->error($e->getMessage(), 400);
+        }
+    }
+
+    public function verifyDocument(int $id, int $docId): void {
+        $input = $this->getJsonInput();
+        $status = $input['status'] ?? 'Approved';
+        $rejectionReason = $input['rejection_reason'] ?? null;
+        try {
+            $doc = $this->residentService->verifyDocument($docId, $status, $rejectionReason);
+            $this->success($doc, "Document status updated to {$status}");
         } catch (Exception $e) {
             $this->error($e->getMessage(), 400);
         }

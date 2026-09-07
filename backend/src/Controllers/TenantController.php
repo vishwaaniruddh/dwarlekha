@@ -35,4 +35,13 @@ class TenantController extends BaseController {
             $this->error($e->getMessage(), 400);
         }
     }
+
+    public function deleteSociety(int $id): void {
+        try {
+            $this->tenantService->deleteSociety($id);
+            $this->success(['id' => $id], 'Society deleted successfully');
+        } catch (Exception $e) {
+            $this->error($e->getMessage(), 400);
+        }
+    }
 }

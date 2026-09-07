@@ -178,6 +178,36 @@ class Resident extends BaseModel {
         return $this->hydrateResidentRecord($r);
     }
 
+    public function findByUserId(int $userId): ?array {
+        $stmt = $this->db->prepare("SELECT id FROM residents WHERE user_id = ? AND is_deleted = 0 ORDER BY id DESC LIMIT 1");
+        $stmt->execute([$userId]);
+        $row = $stmt->fetch();
+        if ($row) {
+            return $this->findById((int)$row['id']);
+        }
+        return null;
+    }
+
+    public function findByEmailOrUnit(string $email, ?string $unitCode = null): ?array {
+        if (!empty($email)) {
+            $stmt = $this->db->prepare("SELECT r.id FROM residents r LEFT JOIN users u ON r.user_id = u.id WHERE (r.email = ? OR u.email = ?) AND r.is_deleted = 0 ORDER BY r.id DESC LIMIT 1");
+            $stmt->execute([$email, $email]);
+            $row = $stmt->fetch();
+            if ($row) {
+                return $this->findById((int)$row['id']);
+            }
+        }
+        if (!empty($unitCode)) {
+            $stmt = $this->db->prepare("SELECT r.id FROM residents r JOIN units un ON r.unit_id = un.id WHERE un.unit_code = ? AND r.is_deleted = 0 ORDER BY r.id DESC LIMIT 1");
+            $stmt->execute([$unitCode]);
+            $row = $stmt->fetch();
+            if ($row) {
+                return $this->findById((int)$row['id']);
+            }
+        }
+        return null;
+    }
+
     private function hydrateResidentRecord(array $r): array {
         $id = (int)$r['id'];
         $famStmt = $this->db->prepare("SELECT * FROM family_members WHERE resident_id = ? AND is_deleted = 0 ORDER BY id ASC");

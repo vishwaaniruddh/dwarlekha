@@ -9,8 +9,17 @@ class Vendor extends BaseModel {
 
     public function getAllBySociety(int $societyId): array {
         $db = Database::getConnection();
-        $stmt = $db->prepare("SELECT * FROM {$this->table} WHERE society_id = ? AND is_deleted = 0 ORDER BY company_name ASC");
-        $stmt->execute([$societyId]);
+        $sql = "SELECT v.*, s.name as society_name, s.society_code 
+            FROM {$this->table} v 
+            JOIN societies s ON v.society_id = s.id 
+            WHERE v.is_deleted = 0";
+        if ($societyId > 0) {
+            $sql .= " AND v.society_id = ? ORDER BY s.id ASC, v.company_name ASC";
+            $stmt = $db->prepare($sql);
+            $stmt->execute([$societyId]);
+        } else {
+            $stmt = $db->query($sql . " ORDER BY s.id ASC, v.company_name ASC");
+        }
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 

@@ -114,22 +114,72 @@ class BillingController extends BaseController {
         }
     }
 
-    public function chargeMasters(): void {
+    public function chargeMasters(?string $subAction = null): void {
         $societyId = TenantContext::resolve();
+        if (!empty($_GET['society_id'])) {
+            $societyId = (int)$_GET['society_id'];
+        }
+
         $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 
+        // 1. POST: Create
         if ($method === 'POST') {
             $input = $this->getJsonInput();
+            if (!empty($input['society_id'])) {
+                $societyId = (int)$input['society_id'];
+            }
+            if ($societyId <= 0) {
+                $this->error('Please select a valid Society Tenant for this charge rule.', 400);
+                return;
+            }
             $input['society_id'] = $societyId;
             try {
                 $id = $this->chargeMasterModel->create($input);
-                $this->success(['id' => $id], 'Charge master rule created successfully', 201);
+                $rule = $this->chargeMasterModel->findById($id);
+                $this->success($rule, 'Charge master rule created successfully', 201);
             } catch (Exception $e) {
                 $this->error($e->getMessage(), 400);
             }
             return;
         }
 
+        // 2. PUT: Update specific rule
+        if ($method === 'PUT' && !empty($subAction) && is_numeric($subAction)) {
+            $ruleId = (int)$subAction;
+            $existing = $this->chargeMasterModel->findById($ruleId);
+            if (!$existing) {
+                $this->error('Charge rule not found', 404);
+                return;
+            }
+            $input = $this->getJsonInput();
+            try {
+                $this->chargeMasterModel->update($ruleId, $input);
+                $updated = $this->chargeMasterModel->findById($ruleId);
+                $this->success($updated, 'Charge rule updated successfully');
+            } catch (Exception $e) {
+                $this->error($e->getMessage(), 400);
+            }
+            return;
+        }
+
+        // 3. DELETE: Soft-delete specific rule
+        if ($method === 'DELETE' && !empty($subAction) && is_numeric($subAction)) {
+            $ruleId = (int)$subAction;
+            $existing = $this->chargeMasterModel->findById($ruleId);
+            if (!$existing) {
+                $this->error('Charge rule not found', 404);
+                return;
+            }
+            try {
+                $this->chargeMasterModel->delete($ruleId);
+                $this->success(['id' => $ruleId], 'Charge rule deleted successfully');
+            } catch (Exception $e) {
+                $this->error($e->getMessage(), 400);
+            }
+            return;
+        }
+
+        // 4. GET: List
         $masters = $this->chargeMasterModel->getAllBySociety($societyId);
         $this->success($masters);
     }

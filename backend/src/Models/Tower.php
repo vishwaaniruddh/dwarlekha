@@ -8,10 +8,14 @@ class Tower extends BaseModel {
         $societyId = ($societyId !== null) ? $societyId : $this->getSocietyId();
         if ($societyId === 0) {
             $stmt = $this->db->prepare("
-                SELECT t.*, 
+                SELECT t.id, t.society_id, t.tower_code, t.name, t.total_floors, t.description, t.created_at, t.updated_at, t.is_deleted, t.deleted_at,
+                       s.name AS society_name,
+                       s.society_code,
+                       COUNT(u.id) AS total_units,
                        COUNT(u.id) AS total_units_count,
                        SUM(CASE WHEN u.occupancy_status != 'Vacant' THEN 1 ELSE 0 END) AS occupied_units_count
                 FROM towers t
+                LEFT JOIN societies s ON t.society_id = s.id
                 LEFT JOIN units u ON t.id = u.tower_id AND u.society_id = t.society_id AND u.is_deleted = 0
                 WHERE t.is_deleted = 0
                 GROUP BY t.id
@@ -22,10 +26,14 @@ class Tower extends BaseModel {
         }
 
         $stmt = $this->db->prepare("
-            SELECT t.*, 
+            SELECT t.id, t.society_id, t.tower_code, t.name, t.total_floors, t.description, t.created_at, t.updated_at, t.is_deleted, t.deleted_at,
+                   s.name AS society_name,
+                   s.society_code,
+                   COUNT(u.id) AS total_units,
                    COUNT(u.id) AS total_units_count,
                    SUM(CASE WHEN u.occupancy_status != 'Vacant' THEN 1 ELSE 0 END) AS occupied_units_count
             FROM towers t
+            LEFT JOIN societies s ON t.society_id = s.id
             LEFT JOIN units u ON t.id = u.tower_id AND u.society_id = t.society_id AND u.is_deleted = 0
             WHERE t.society_id = ? AND t.is_deleted = 0
             GROUP BY t.id
@@ -36,29 +44,68 @@ class Tower extends BaseModel {
     }
 
     public function findById(int $id): ?array {
-        $stmt = $this->db->prepare("SELECT * FROM towers WHERE id = ? AND is_deleted = 0 LIMIT 1");
+        $stmt = $this->db->prepare("
+            SELECT t.id, t.society_id, t.tower_code, t.name, t.total_floors, t.description, t.created_at, t.updated_at, t.is_deleted, t.deleted_at,
+                   s.name AS society_name,
+                   s.society_code,
+                   COUNT(u.id) AS total_units,
+                   COUNT(u.id) AS total_units_count,
+                   SUM(CASE WHEN u.occupancy_status != 'Vacant' THEN 1 ELSE 0 END) AS occupied_units_count
+            FROM towers t
+            LEFT JOIN societies s ON t.society_id = s.id
+            LEFT JOIN units u ON t.id = u.tower_id AND u.society_id = t.society_id AND u.is_deleted = 0
+            WHERE t.id = ? AND t.is_deleted = 0
+            GROUP BY t.id
+            LIMIT 1
+        ");
         $stmt->execute([$id]);
         $row = $stmt->fetch();
         return $row ?: null;
     }
 
     public function findByName(string $name, ?int $societyId = null): ?array {
-        $societyId = $societyId ?: $this->getSocietyId();
-        $stmt = $this->db->prepare("SELECT * FROM towers WHERE society_id = ? AND name = ? AND is_deleted = 0 LIMIT 1");
-        $stmt->execute([$societyId, $name]);
+        $societyId = ($societyId !== null) ? $societyId : $this->getSocietyId();
+        if ($societyId === 0) {
+            $stmt = $this->db->prepare("
+                SELECT t.id, t.society_id, t.tower_code, t.name, t.total_floors, t.description, t.created_at, t.updated_at, t.is_deleted, t.deleted_at,
+                       s.name AS society_name,
+                       s.society_code,
+                       COUNT(u.id) AS total_units
+                FROM towers t
+                LEFT JOIN societies s ON t.society_id = s.id
+                LEFT JOIN units u ON t.id = u.tower_id AND u.is_deleted = 0
+                WHERE t.name = ? AND t.is_deleted = 0 
+                GROUP BY t.id
+                LIMIT 1
+            ");
+            $stmt->execute([$name]);
+        } else {
+            $stmt = $this->db->prepare("
+                SELECT t.id, t.society_id, t.tower_code, t.name, t.total_floors, t.description, t.created_at, t.updated_at, t.is_deleted, t.deleted_at,
+                       s.name AS society_name,
+                       s.society_code,
+                       COUNT(u.id) AS total_units
+                FROM towers t
+                LEFT JOIN societies s ON t.society_id = s.id
+                LEFT JOIN units u ON t.id = u.tower_id AND u.is_deleted = 0
+                WHERE t.society_id = ? AND t.name = ? AND t.is_deleted = 0 
+                GROUP BY t.id
+                LIMIT 1
+            ");
+            $stmt->execute([$societyId, $name]);
+        }
         $row = $stmt->fetch();
         return $row ?: null;
     }
 
     public function create(array $data): int {
         $societyId = $data['society_id'] ?? $this->getSocietyId();
-        $stmt = $this->db->prepare("INSERT INTO towers (society_id, tower_code, name, total_floors, total_units) VALUES (?, ?, ?, ?, ?)");
+        $stmt = $this->db->prepare("INSERT INTO towers (society_id, tower_code, name, total_floors, total_units, is_deleted) VALUES (?, ?, ?, ?, 0, 0)");
         $stmt->execute([
             $societyId,
             $data['tower_code'] ?? ('T-' . substr($data['name'] ?? 'T', 0, 3)),
             $data['name'],
-            (int)($data['total_floors'] ?? 10),
-            (int)($data['total_units'] ?? 0)
+            (int)($data['total_floors'] ?? 10)
         ]);
         return (int)$this->db->lastInsertId();
     }
@@ -79,10 +126,6 @@ class Tower extends BaseModel {
             $fields[] = "total_floors = ?";
             $params[] = (int)$data['total_floors'];
         }
-        if (isset($data['total_units'])) {
-            $fields[] = "total_units = ?";
-            $params[] = (int)$data['total_units'];
-        }
         if (isset($data['description'])) {
             $fields[] = "description = ?";
             $params[] = $data['description'];
@@ -91,7 +134,7 @@ class Tower extends BaseModel {
         if (empty($fields)) return false;
 
         $params[] = $id;
-        $sql = "UPDATE towers SET " . implode(", ", $fields) . " WHERE id = ?";
+        $sql = "UPDATE towers SET " . implode(", ", $fields) . " WHERE id = ? AND is_deleted = 0";
         $stmt = $this->db->prepare($sql);
         return $stmt->execute($params);
     }

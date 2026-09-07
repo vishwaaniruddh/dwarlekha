@@ -132,7 +132,7 @@ class PaymentController extends BaseController {
     public function recordOffline(): void {
         $societyId = TenantContext::resolve();
         $input = $this->getJsonInput();
-        $input['society_id'] = $societyId;
+        $input['society_id'] = !empty($input['society_id']) ? (int)$input['society_id'] : $societyId;
 
         try {
             $result = $this->paymentModel->recordPayment($input);

@@ -26,6 +26,19 @@ class ChargeMaster extends BaseModel {
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
+    public function findById(int $id): ?array {
+        $db = Database::getConnection();
+        $stmt = $db->prepare("SELECT cm.*, coa.account_name as gl_account_name, coa.account_code as gl_account_code, s.society_code, s.name as society_name 
+            FROM {$this->table} cm 
+            JOIN societies s ON cm.society_id = s.id 
+            LEFT JOIN chart_of_accounts coa ON cm.gl_account_id = coa.id
+            WHERE cm.id = ? AND cm.is_deleted = 0 
+            LIMIT 1");
+        $stmt->execute([$id]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ?: null;
+    }
+
     public function create(array $data): int {
         $db = Database::getConnection();
         $manageTx = !$db->inTransaction();
@@ -49,6 +62,83 @@ class ChargeMaster extends BaseModel {
             $id = (int)$db->lastInsertId();
             if ($manageTx) $db->commit();
             return $id;
+        } catch (\Throwable $e) {
+            if ($manageTx && $db->inTransaction()) $db->rollBack();
+            throw $e;
+        }
+    }
+
+    public function update(int $id, array $data): bool {
+        $db = Database::getConnection();
+        $manageTx = !$db->inTransaction();
+        if ($manageTx) $db->beginTransaction();
+
+        try {
+            $fields = [];
+            $params = [];
+
+            if (isset($data['society_id'])) {
+                $fields[] = "society_id = ?";
+                $params[] = (int)$data['society_id'];
+            }
+            if (isset($data['charge_name'])) {
+                $fields[] = "charge_name = ?";
+                $params[] = trim($data['charge_name']);
+            }
+            if (isset($data['calculation_type'])) {
+                $fields[] = "calculation_type = ?";
+                $params[] = $data['calculation_type'];
+            }
+            if (isset($data['rate_amount'])) {
+                $fields[] = "rate_amount = ?";
+                $params[] = (float)$data['rate_amount'];
+            }
+            if (array_key_exists('gl_account_id', $data)) {
+                $fields[] = "gl_account_id = ?";
+                $params[] = $data['gl_account_id'] ? (int)$data['gl_account_id'] : null;
+            }
+            if (isset($data['gst_percentage'])) {
+                $fields[] = "gst_percentage = ?";
+                $params[] = (float)$data['gst_percentage'];
+            }
+            if (isset($data['is_recurring'])) {
+                $fields[] = "is_recurring = ?";
+                $params[] = $data['is_recurring'] ? 1 : 0;
+            }
+            if (isset($data['billing_cycle'])) {
+                $fields[] = "billing_cycle = ?";
+                $params[] = $data['billing_cycle'];
+            }
+            if (array_key_exists('description', $data)) {
+                $fields[] = "description = ?";
+                $params[] = $data['description'];
+            }
+
+            if (empty($fields)) return false;
+
+            $params[] = $id;
+            $sql = "UPDATE {$this->table} SET " . implode(", ", $fields) . " WHERE id = ? AND is_deleted = 0";
+            $stmt = $db->prepare($sql);
+            $res = $stmt->execute($params);
+
+            if ($manageTx) $db->commit();
+            return $res;
+        } catch (\Throwable $e) {
+            if ($manageTx && $db->inTransaction()) $db->rollBack();
+            throw $e;
+        }
+    }
+
+    public function delete(int $id): bool {
+        $db = Database::getConnection();
+        $manageTx = !$db->inTransaction();
+        if ($manageTx) $db->beginTransaction();
+
+        try {
+            $stmt = $db->prepare("UPDATE {$this->table} SET is_deleted = 1, deleted_at = NOW() WHERE id = ?");
+            $res = $stmt->execute([$id]);
+            if ($manageTx) $db->commit();
+            return $res;
         } catch (\Throwable $e) {
             if ($manageTx && $db->inTransaction()) $db->rollBack();
             throw $e;

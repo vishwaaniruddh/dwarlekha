@@ -19,15 +19,25 @@ class ResidentDocument extends BaseModel {
 
     public function create(array $data): int {
         $stmt = $this->db->prepare("INSERT INTO resident_documents 
-            (resident_id, document_type, document_number, file_url) 
-            VALUES (?, ?, ?, ?)");
+            (resident_id, document_type, document_number, file_url, verification_status) 
+            VALUES (?, ?, ?, ?, ?)");
         $stmt->execute([
             $data['resident_id'],
-            $data['document_type'] ?? 'Aadhaar',
+            $data['document_type'] ?? 'Aadhaar Card',
             $data['document_number'] ?? null,
-            $data['file_url']
+            $data['file_url'],
+            $data['verification_status'] ?? 'Pending'
         ]);
         return (int)$this->db->lastInsertId();
+    }
+
+    public function updateVerificationStatus(int $id, string $status, ?string $rejectionReason = null): bool {
+        $stmt = $this->db->prepare("UPDATE resident_documents 
+            SET verification_status = ?, 
+                rejection_reason = ?, 
+                verified_at = IF(? = 'Approved', NOW(), NULL) 
+            WHERE id = ?");
+        return $stmt->execute([$status, $rejectionReason, $status, $id]);
     }
 
     public function delete(int $id): bool {

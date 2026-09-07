@@ -19,7 +19,20 @@ class RoleService {
 
     public function getRoles(): array {
         $societyId = TenantContext::getSocietyId();
-        return $this->roleModel->getAll($societyId);
+        $currentUser = \App\Config\RbacGuard::getCurrentUser();
+        $isParentUser = !empty($currentUser['isParentUser']) || in_array($currentUser['role']['code'] ?? '', ['sar_platform_admin', 'sar_support']);
+
+        $roles = $this->roleModel->getAll($societyId);
+
+        // SAR platform HQ roles (sar_platform_admin, sar_support) belong strictly to SAR Parent HQ
+        // They must NOT be visible to client society admins or tenant users
+        if (!$isParentUser || ($societyId !== null && $societyId > 0)) {
+            $roles = array_values(array_filter($roles, function($r) {
+                return !str_starts_with($r['role_code'] ?? '', 'sar_');
+            }));
+        }
+
+        return $roles;
     }
 
     public function getRoleById(int $id): ?array {

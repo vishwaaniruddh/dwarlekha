@@ -38,6 +38,44 @@ class AccountingController extends BaseController {
         $this->success($accounts);
     }
 
+    public function getChartOfAccount(int $id): void {
+        $account = $this->coaModel->findById($id);
+        if (!$account) {
+            $this->error('General ledger account not found', 404);
+            return;
+        }
+        $this->success($account);
+    }
+
+    public function updateChartOfAccount(int $id): void {
+        $input = $this->getJsonInput();
+        try {
+            $this->coaModel->update($id, $input);
+            $account = $this->coaModel->findById($id);
+            $this->success($account, 'General ledger account updated successfully');
+        } catch (Exception $e) {
+            $this->error($e->getMessage(), 400);
+        }
+    }
+
+    public function deleteChartOfAccount(int $id): void {
+        try {
+            $this->coaModel->delete($id);
+            $this->success(null, 'General ledger account archived successfully');
+        } catch (Exception $e) {
+            $this->error($e->getMessage(), 400);
+        }
+    }
+
+    public function checkChartOfAccountUsage(int $id): void {
+        try {
+            $check = $this->coaModel->checkDependencies($id);
+            $this->success($check);
+        } catch (Exception $e) {
+            $this->error($e->getMessage(), 400);
+        }
+    }
+
     public function journalEntries(): void {
         $societyId = TenantContext::resolve();
         $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';

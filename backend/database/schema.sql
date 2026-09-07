@@ -13,8 +13,9 @@ USE `society_management_program`;
 -- 1. Societies Master (Module 01: Multi-Tenancy Master)
 CREATE TABLE IF NOT EXISTS `societies` (
   `id` INT AUTO_INCREMENT PRIMARY KEY,
-  `society_code` VARCHAR(20) UNIQUE NOT NULL, -- Globally unique code (Rule 1: e.g. EMR-01, SPH-02)
+  `society_code` VARCHAR(50) NOT NULL, -- Globally unique code for active society
   `name` VARCHAR(150) NOT NULL,
+  `legal_name` VARCHAR(150) NULL,
   `registration_number` VARCHAR(100),
   `address_line1` VARCHAR(255),
   `address_line2` VARCHAR(255),
@@ -27,14 +28,21 @@ CREATE TABLE IF NOT EXISTS `societies` (
   `zone` VARCHAR(50) NULL,
   `contact_email` VARCHAR(100),
   `contact_phone` VARCHAR(20),
+  `bank_name` VARCHAR(100) NULL,
+  `bank_account_no` VARCHAR(50) NULL,
+  `bank_ifsc` VARCHAR(30) NULL,
+  `upi_vpa` VARCHAR(100) NULL,
   `logo_url` VARCHAR(255),
   `currency` VARCHAR(10) DEFAULT 'INR',
   `timezone` VARCHAR(50) DEFAULT 'Asia/Kolkata',
   `is_active` BOOLEAN DEFAULT TRUE,
   `tagline` VARCHAR(255),
   `total_units` INT DEFAULT 0,
+  `is_deleted` TINYINT(1) NOT NULL DEFAULT 0,
+  `deleted_at` TIMESTAMP NULL DEFAULT NULL,
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY `uk_society_code_active` (`society_code`, `is_deleted`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 2. Towers / Blocks (Rule 2: Unique block name per society)
@@ -46,10 +54,12 @@ CREATE TABLE IF NOT EXISTS `towers` (
   `total_floors` INT DEFAULT 1,
   `total_units` INT DEFAULT 0,
   `description` VARCHAR(255),
+  `is_deleted` TINYINT(1) NOT NULL DEFAULT 0,
+  `deleted_at` TIMESTAMP NULL DEFAULT NULL,
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   FOREIGN KEY (`society_id`) REFERENCES `societies`(`id`) ON DELETE CASCADE,
-  UNIQUE KEY `uk_society_block` (`society_id`, `name`)
+  UNIQUE KEY `uk_society_block_active` (`society_id`, `name`, `is_deleted`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 2.1 Standard & Custom Unit Types Catalog
@@ -88,7 +98,9 @@ CREATE TABLE IF NOT EXISTS `units` (
   FOREIGN KEY (`tower_id`) REFERENCES `towers`(`id`) ON DELETE CASCADE,
   INDEX `idx_unit_status` (`occupancy_status`),
   INDEX `idx_unit_tower` (`tower_id`, `floor_number`),
-  UNIQUE KEY `uk_block_unit` (`tower_id`, `unit_code`)
+  `is_deleted` TINYINT(1) NOT NULL DEFAULT 0,
+  `deleted_at` TIMESTAMP NULL DEFAULT NULL,
+  UNIQUE KEY `uk_block_unit_active` (`tower_id`, `unit_code`, `is_deleted`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 4. RBAC Roles Master
@@ -207,10 +219,15 @@ CREATE TABLE IF NOT EXISTS `family_members` (
 CREATE TABLE IF NOT EXISTS `resident_documents` (
   `id` INT AUTO_INCREMENT PRIMARY KEY,
   `resident_id` INT NOT NULL,
-  `document_type` ENUM('Aadhaar', 'PAN', 'Passport', 'Driving License', 'Voter ID', 'Rental Agreement', 'Sale Deed', 'Electricity Bill', 'Other') NOT NULL DEFAULT 'Aadhaar',
+  `document_type` VARCHAR(100) NOT NULL DEFAULT 'Aadhaar Card',
   `document_number` VARCHAR(100) NULL,
-  `file_url` VARCHAR(255) NOT NULL,
+  `file_url` LONGTEXT NOT NULL,
+  `verification_status` ENUM('Pending', 'Approved', 'Rejected') NOT NULL DEFAULT 'Pending',
+  `verified_at` TIMESTAMP NULL DEFAULT NULL,
+  `rejection_reason` VARCHAR(255) NULL DEFAULT NULL,
   `uploaded_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `is_deleted` TINYINT(1) NOT NULL DEFAULT 0,
+  `deleted_at` TIMESTAMP NULL DEFAULT NULL,
   FOREIGN KEY (`resident_id`) REFERENCES `residents`(`id`) ON DELETE CASCADE,
   INDEX `idx_doc_resident` (`resident_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -436,4 +453,49 @@ CREATE TABLE IF NOT EXISTS `cities` (
   FOREIGN KEY (`zone_id`) REFERENCES `zones`(`id`) ON DELETE SET NULL,
   INDEX `idx_city_state` (`state_id`),
   INDEX `idx_city_country` (`country_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 25. Multi-Tenant Society SMTP Email Configurations
+CREATE TABLE IF NOT EXISTS `smtp_configs` (
+  `id` INT(11) NOT NULL AUTO_INCREMENT,
+  `society_id` INT(11) NOT NULL,
+  `sender_name` VARCHAR(150) NOT NULL DEFAULT 'Society Management Office',
+  `sender_email` VARCHAR(150) NOT NULL,
+  `reply_to_email` VARCHAR(150) DEFAULT NULL,
+  `smtp_host` VARCHAR(255) NOT NULL,
+  `smtp_port` INT(11) NOT NULL DEFAULT 587,
+  `smtp_encryption` ENUM('tls', 'ssl', 'none') NOT NULL DEFAULT 'tls',
+  `smtp_username` VARCHAR(255) NOT NULL,
+  `smtp_password` TEXT NOT NULL,
+  `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+  `last_tested_at` TIMESTAMP NULL DEFAULT NULL,
+  `last_test_status` ENUM('pending', 'success', 'failed') NOT NULL DEFAULT 'pending',
+  `last_test_error` TEXT DEFAULT NULL,
+  `is_deleted` TINYINT(1) NOT NULL DEFAULT 0,
+  `deleted_at` TIMESTAMP NULL DEFAULT NULL,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_society_smtp` (`society_id`, `is_deleted`),
+  CONSTRAINT `fk_smtp_society` FOREIGN KEY (`society_id`) REFERENCES `societies` (`id`) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 26. Email Audit & Dispatch Logs
+CREATE TABLE IF NOT EXISTS `email_logs` (
+  `id` INT(11) NOT NULL AUTO_INCREMENT,
+  `society_id` INT(11) NOT NULL,
+  `recipient_email` VARCHAR(255) NOT NULL,
+  `recipient_name` VARCHAR(150) DEFAULT NULL,
+  `subject` VARCHAR(255) NOT NULL,
+  `body_html` LONGTEXT DEFAULT NULL,
+  `body_text` TEXT DEFAULT NULL,
+  `status` ENUM('sent', 'failed', 'queued') NOT NULL DEFAULT 'sent',
+  `error_message` TEXT DEFAULT NULL,
+  `sent_at` TIMESTAMP NULL DEFAULT NULL,
+  `is_deleted` TINYINT(1) NOT NULL DEFAULT 0,
+  `deleted_at` TIMESTAMP NULL DEFAULT NULL,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_email_society` (`society_id`, `is_deleted`),
+  KEY `idx_email_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

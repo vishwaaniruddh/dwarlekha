@@ -10,14 +10,17 @@ class Payment extends BaseModel {
     public function getAllBySociety(int $societyId, array $filters = []): array {
         $db = Database::getConnection();
         $sql = "SELECT p.*, u.unit_code, b.bill_number, 
-            COALESCE(ru.full_name, u.owner_name, 'Resident') as resident_name, 
+            s.name as society_name, s.society_code, s.address_line1 as society_address, s.city as society_city,
+            COALESCE(
+                (SELECT ru.full_name FROM unit_occupancies uo JOIN residents r ON uo.resident_id = r.id JOIN users ru ON r.user_id = ru.id WHERE uo.unit_id = u.id AND r.is_deleted = 0 ORDER BY uo.is_primary DESC, uo.id ASC LIMIT 1),
+                u.owner_name, 
+                'Resident'
+            ) as resident_name, 
             rec.full_name as recorded_by_name 
             FROM {$this->table} p 
             JOIN units u ON p.unit_id = u.id 
+            JOIN societies s ON p.society_id = s.id
             LEFT JOIN bills b ON p.bill_id = b.id 
-            LEFT JOIN unit_occupancies uo ON u.id = uo.unit_id AND uo.is_primary = 1 
-            LEFT JOIN residents r ON uo.resident_id = r.id 
-            LEFT JOIN users ru ON r.user_id = ru.id 
             LEFT JOIN users rec ON p.recorded_by_user_id = rec.id";
 
         if ($societyId > 0) {
@@ -77,8 +80,19 @@ class Payment extends BaseModel {
                 }
             }
 
-            $societyId = (int)($data['society_id'] ?? 1);
             $unitId = (int)($data['unit_id'] ?? 1);
+            $societyId = !empty($data['society_id']) ? (int)$data['society_id'] : 0;
+            if ($societyId <= 0 && $unitId > 0) {
+                $uStmt = $db->prepare("SELECT society_id FROM units WHERE id = ?");
+                $uStmt->execute([$unitId]);
+                $uSoc = $uStmt->fetchColumn();
+                if ($uSoc) $societyId = (int)$uSoc;
+            }
+            if ($societyId <= 0) {
+                $societyId = \App\Utils\TenantContext::resolve();
+            }
+            if ($societyId <= 0) $societyId = 1;
+
             $amount = (float)($data['amount'] ?? 0);
             $paymentMode = $data['payment_mode'] ?? 'UPI';
             $status = $data['status'] ?? ($paymentMode === 'Cheque' ? 'Pending' : 'Success');
@@ -113,8 +127,17 @@ class Payment extends BaseModel {
             }
 
             if ($manageTx) $db->commit();
+
+            $socStmt = $db->prepare("SELECT name, society_code, address_line1 FROM societies WHERE id = ?");
+            $socStmt->execute([$societyId]);
+            $socRow = $socStmt->fetch(PDO::FETCH_ASSOC);
+
             return [
                 'id' => $paymentId,
+                'society_id' => $societyId,
+                'society_name' => $socRow['name'] ?? 'Society',
+                'society_code' => $socRow['society_code'] ?? '',
+                'society_address' => $socRow['address_line1'] ?? '',
                 'receipt_number' => $receiptNumber,
                 'status' => $status,
                 'amount' => $amount

@@ -35,10 +35,13 @@ class Bill extends BaseModel {
             COALESCE(
                 (SELECT ru6.email FROM unit_occupancies uo6 JOIN residents r6 ON uo6.resident_id = r6.id JOIN users ru6 ON r6.user_id = ru6.id WHERE uo6.unit_id = u.id AND r6.is_deleted = 0 ORDER BY (CASE WHEN r6.resident_type = 'Tenant' THEN 1 ELSE 2 END), uo6.is_primary DESC, uo6.id ASC LIMIT 1),
                 u.contact_email
-            ) as resident_email 
+            ) as resident_email, 
+            s.name as society_name, s.address_line1 as society_address, s.society_code,
+            s.bank_name, s.bank_account_no, s.bank_ifsc, s.upi_vpa, s.city as society_city, s.legal_name as society_legal_name
             FROM {$this->table} b 
             JOIN units u ON b.unit_id = u.id 
-            JOIN towers t ON u.tower_id = t.id";
+            JOIN towers t ON u.tower_id = t.id
+            JOIN societies s ON b.society_id = s.id";
 
         if ($societyId > 0) {
             $sql .= " WHERE b.society_id = ? AND b.is_deleted = 0";
@@ -113,7 +116,8 @@ class Bill extends BaseModel {
                 (SELECT ru6.email FROM unit_occupancies uo6 JOIN residents r6 ON uo6.resident_id = r6.id JOIN users ru6 ON r6.user_id = ru6.id WHERE uo6.unit_id = u.id AND r6.is_deleted = 0 ORDER BY (CASE WHEN r6.resident_type = 'Tenant' THEN 1 ELSE 2 END), uo6.is_primary DESC, uo6.id ASC LIMIT 1),
                 u.contact_email
             ) as resident_email,
-            s.name as society_name, s.address as society_address, s.society_code 
+            s.name as society_name, s.address as society_address, s.society_code,
+            s.bank_name, s.bank_account_no, s.bank_ifsc, s.upi_vpa, s.city as society_city, s.legal_name as society_legal_name
             FROM {$this->table} b 
             JOIN units u ON b.unit_id = u.id 
             JOIN towers t ON u.tower_id = t.id 
@@ -129,6 +133,19 @@ class Bill extends BaseModel {
             WHERE bi.bill_id = ?");
         $stmtItems->execute([$id]);
         $bill['items'] = $stmtItems->fetchAll(PDO::FETCH_ASSOC);
+
+        // Fetch recent payments / receipts for this unit to eliminate resident disputes
+        $stmtReceipts = $db->prepare("SELECT receipt_number, amount, payment_mode, payment_date 
+            FROM payments 
+            WHERE unit_id = ? AND status = 'Success' AND is_deleted = 0 
+            ORDER BY payment_date DESC LIMIT 3");
+        $stmtReceipts->execute([$bill['unit_id']]);
+        $bill['receipts'] = $stmtReceipts->fetchAll(PDO::FETCH_ASSOC);
+
+        // Compute prior arrears before this bill
+        $stmtPrev = $db->prepare("SELECT COALESCE(SUM(outstanding_amount), 0) FROM bills WHERE unit_id = ? AND id < ? AND is_deleted = 0");
+        $stmtPrev->execute([$bill['unit_id'], $id]);
+        $bill['prev_arrears'] = (float)$stmtPrev->fetchColumn();
 
         return $bill;
     }

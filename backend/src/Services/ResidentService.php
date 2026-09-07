@@ -52,6 +52,46 @@ class ResidentService {
         return $this->residentModel->findById($id);
     }
 
+    public function getMyResidentPassport(array $currUser): ?array {
+        $userId = !empty($currUser['id']) ? (int)$currUser['id'] : null;
+        if ($userId) {
+            $passport = $this->residentModel->findByUserId($userId);
+            if ($passport) {
+                return $passport;
+            }
+        }
+
+        $email = $currUser['email'] ?? '';
+        $unitCode = $currUser['unitCode'] ?? ($currUser['unit_code'] ?? null);
+
+        $passport = $this->residentModel->findByEmailOrUnit($email, $unitCode);
+        if ($passport) {
+            if ($userId && empty($passport['user_id'])) {
+                $db = Database::getConnection();
+                $cleanId = (int)($passport['resident_id'] ?? preg_replace('/^RES-/i', '', $passport['id']));
+                $stmt = $db->prepare("UPDATE residents SET user_id = ? WHERE id = ?");
+                $stmt->execute([$userId, $cleanId]);
+                $passport['user_id'] = $userId;
+            }
+            return $passport;
+        }
+
+        if (!empty($unitCode)) {
+            $unit = $this->unitModel->findByCode($unitCode, null);
+            if ($unit) {
+                $societyId = (int)($unit['society_id'] ?? TenantContext::getSocietyId());
+                $db = Database::getConnection();
+                $roleType = (isset($currUser['role']['name']) && stripos($currUser['role']['name'], 'tenant') !== false) ? 'Tenant' : 'Owner';
+                $stmt = $db->prepare("INSERT INTO residents (society_id, user_id, unit_id, resident_type, is_primary_contact, move_in_date, verification_status) VALUES (?, ?, ?, ?, 1, CURDATE(), 'Pending')");
+                $stmt->execute([$societyId, $userId, (int)$unit['id'], $roleType]);
+                $newResId = (int)$db->lastInsertId();
+                return $this->residentModel->findById($newResId);
+            }
+        }
+
+        return null;
+    }
+
     public function onboard(array $input): array {
         $name = trim($input['name'] ?? ($input['full_name'] ?? ($input['fullName'] ?? '')));
         $flatNumber = trim($input['flat'] ?? ($input['flatNumber'] ?? ($input['flat_number'] ?? ($input['unit_code'] ?? ($input['unitCode'] ?? '')))));
@@ -181,7 +221,7 @@ class ResidentService {
             ], $societyId);
 
             // 4. Create resident record
-            $verificationStatus = $input['verification_status'] ?? ($input['verificationStatus'] ?? 'Approved');
+            $verificationStatus = $input['verification_status'] ?? ($input['verificationStatus'] ?? 'Pending');
             $residentId = $this->residentModel->create([
                 'society_id' => $societyId,
                 'user_id' => $userId,
@@ -405,12 +445,55 @@ class ResidentService {
 
     public function addDocument(int $residentId, array $data): array {
         $data['resident_id'] = $residentId;
+
+        // If file_url is a base64 data URI, write it to physical disk to avoid DB packet bloat
+        if (!empty($data['file_url']) && preg_match('/^data:([a-zA-Z0-9\+\-\.\/]+);base64,/', $data['file_url'], $matches)) {
+            $mime = strtolower($matches[1]);
+            $ext = 'png';
+            if (strpos($mime, 'jpeg') !== false || strpos($mime, 'jpg') !== false) {
+                $ext = 'jpg';
+            } elseif (strpos($mime, 'pdf') !== false) {
+                $ext = 'pdf';
+            } elseif (strpos($mime, 'webp') !== false) {
+                $ext = 'webp';
+            } elseif (strpos($mime, 'svg') !== false) {
+                $ext = 'svg';
+            }
+
+            $rawBase64 = substr($data['file_url'], strpos($data['file_url'], ',') + 1);
+            $decoded = base64_decode($rawBase64);
+            if ($decoded !== false) {
+                $uploadDir = __DIR__ . '/../../public/uploads/documents/';
+                if (!is_dir($uploadDir)) {
+                    @mkdir($uploadDir, 0777, true);
+                }
+                $filename = 'doc_res' . $residentId . '_' . time() . '_' . bin2hex(random_bytes(3)) . '.' . $ext;
+                $targetFile = $uploadDir . $filename;
+                if (file_put_contents($targetFile, $decoded) !== false) {
+                    $data['file_url'] = 'uploads/documents/' . $filename;
+                }
+            }
+        }
+
         $id = $this->documentModel->create($data);
         return $this->documentModel->findById($id);
     }
 
     public function deleteDocument(int $docId): bool {
         return $this->documentModel->delete($docId);
+    }
+
+    public function verifyDocument(int $docId, string $status, ?string $rejectionReason = null): array {
+        $allowed = ['Pending', 'Approved', 'Rejected'];
+        if (!in_array($status, $allowed)) {
+            throw new \InvalidArgumentException("Status must be Pending, Approved, or Rejected.");
+        }
+        $this->documentModel->updateVerificationStatus($docId, $status, $rejectionReason);
+        $doc = $this->documentModel->findById($docId);
+        if (!$doc) {
+            throw new \Exception("Document not found.");
+        }
+        return $doc;
     }
 
     public function addVehicle(int $residentId, array $data): array {

@@ -26,6 +26,7 @@ use App\Controllers\UploadController;
 use App\Controllers\PushNotificationController;
 use App\Controllers\VehicleController;
 use App\Controllers\SyncController;
+use App\Controllers\SmtpConfigController;
 
 class Router {
     public function dispatch(): void {
@@ -56,9 +57,9 @@ class Router {
 
         $segments = explode('/', $route);
         $resource = $segments[0] ?? '';
-        $action = $segments[1] ?? '';
-        $subAction = $segments[2] ?? '';
-        $param = $segments[2] ?? ($segments[1] ?? '');
+        $action = $segments[1] ?? ($_GET['action'] ?? '');
+        $subAction = $segments[2] ?? ($_GET['subAction'] ?? '');
+        $param = $segments[2] ?? ($segments[1] ?? ($_GET['param'] ?? ''));
 
         try {
             switch ($resource) {
@@ -137,6 +138,8 @@ class Router {
                         $ctrl->createSociety();
                     } elseif ($method === 'PUT' && !empty($action)) {
                         $ctrl->updateSociety((int)$action);
+                    } elseif ($method === 'DELETE' && !empty($action)) {
+                        $ctrl->deleteSociety((int)$action);
                     }
                     break;
 
@@ -184,6 +187,8 @@ class Router {
                         $ctrl->index();
                     } elseif ($method === 'GET' && !empty($action)) {
                         $ctrl->show($action);
+                    } elseif ($method === 'PUT' && !empty($action)) {
+                        $ctrl->update($action);
                     } elseif ($method === 'POST' && ($action === 'bulk' || $action === 'generate')) {
                         $ctrl->bulkGenerate();
                     } elseif ($method === 'POST' && $action === 'batch') {
@@ -204,6 +209,8 @@ class Router {
 
                     if ($method === 'GET' && empty($action)) {
                         $ctrl->index();
+                    } elseif ($method === 'GET' && $action === 'me') {
+                        $ctrl->me();
                     } elseif ($method === 'GET' && is_numeric($cleanAction) && $subAction === 'credentials') {
                         $ctrl->credentials((int)$cleanAction);
                     } elseif ($method === 'POST' && is_numeric($cleanAction) && $subAction === 'credentials') {
@@ -222,6 +229,8 @@ class Router {
                         $ctrl->addDocument((int)$cleanAction);
                     } elseif ($method === 'DELETE' && is_numeric($cleanAction) && $subAction === 'documents') {
                         $ctrl->deleteDocument((int)$cleanAction, (int)$cleanSubParam);
+                    } elseif ($method === 'PUT' && is_numeric($cleanAction) && $subAction === 'documents') {
+                        $ctrl->verifyDocument((int)$cleanAction, (int)$cleanSubParam);
                     } elseif ($method === 'POST' && is_numeric($cleanAction) && $subAction === 'vehicles') {
                         $ctrl->addVehicle((int)$cleanAction);
                     } elseif ($method === 'DELETE' && is_numeric($cleanAction) && $subAction === 'vehicles') {
@@ -297,7 +306,7 @@ class Router {
                 case 'invoices':
                     $ctrl = new BillingController();
                     if ($action === 'charge-masters') {
-                        $ctrl->chargeMasters();
+                        $ctrl->chargeMasters($subAction);
                     } elseif ($action === 'generate' && $method === 'POST') {
                         $ctrl->generate();
                     } elseif ($action === 'summary' && $method === 'GET') {
@@ -329,7 +338,25 @@ class Router {
                 case 'accounting':
                     $ctrl = new AccountingController();
                     if ($action === 'chart-of-accounts') {
-                        $ctrl->chartOfAccounts();
+                        if (!empty($subAction) && is_numeric($subAction)) {
+                            $accId = (int)$subAction;
+                            $checkUsage = ($segments[3] ?? '') === 'check-usage';
+                            if ($method === 'PUT') {
+                                $ctrl->updateChartOfAccount($accId);
+                            } elseif ($method === 'DELETE') {
+                                $ctrl->deleteChartOfAccount($accId);
+                            } elseif ($method === 'GET') {
+                                if ($checkUsage) {
+                                    $ctrl->checkChartOfAccountUsage($accId);
+                                } else {
+                                    $ctrl->getChartOfAccount($accId);
+                                }
+                            } else {
+                                $ctrl->chartOfAccounts();
+                            }
+                        } else {
+                            $ctrl->chartOfAccounts();
+                        }
                     } elseif ($action === 'journal-entries') {
                         $ctrl->journalEntries();
                     } elseif ($action === 'trial-balance') {
@@ -502,6 +529,55 @@ class Router {
                         $ctrl->pullRemote();
                     } else {
                         $ctrl->status();
+                    }
+                    break;
+
+                // 14. Society & Accounting Setup Wizard
+                case 'setup':
+                case 'setup-wizard':
+                    $ctrl = new \App\Controllers\SetupWizardController();
+                    if ($action === 'status') {
+                        $ctrl->status();
+                    } elseif ($action === 'step' && $subAction === 'society') {
+                        $ctrl->saveSocietyBank();
+                    } elseif ($action === 'step' && ($subAction === 'towers' || $subAction === 'towers-units' || $subAction === 'units')) {
+                        $ctrl->generateTowersUnits();
+                    } elseif ($action === 'step' && ($subAction === 'coa' || $subAction === 'coa-preset')) {
+                        $ctrl->applyCoaPreset();
+                    } elseif ($action === 'step' && ($subAction === 'charge-rules' || $subAction === 'charges')) {
+                        $ctrl->saveChargeRules();
+                    } elseif ($action === 'step' && ($subAction === 'smtp' || $subAction === 'email')) {
+                        $ctrl->saveSmtp();
+                    } elseif ($action === 'step' && ($subAction === 'skip-smtp' || $subAction === 'skip-email')) {
+                        $ctrl->skipSmtp();
+                    } elseif ($action === 'step' && ($subAction === 'admin' || $subAction === 'admin-user')) {
+                        $ctrl->createAdminUser();
+                    } elseif ($action === 'quick-launch') {
+                        $ctrl->quickLaunch();
+                    } else {
+                        $ctrl->status();
+                    }
+                    break;
+
+                // 15. Dedicated Multi-Tenant SMTP Mailer & Deliverability Audit
+                case 'smtp':
+                    $ctrl = new SmtpConfigController();
+                    if ($method === 'GET' && ($action === 'config' || empty($action))) {
+                        $ctrl->getConfig();
+                    } elseif ($method === 'POST' && ($action === 'config' || empty($action))) {
+                        $ctrl->saveConfig();
+                    } elseif ($method === 'POST' && $action === 'test') {
+                        $ctrl->testConnection();
+                    } elseif ($method === 'POST' && ($action === 'send-test' || $action === 'test-email')) {
+                        $ctrl->sendTestEmail();
+                    } elseif ($method === 'GET' && $action === 'logs') {
+                        $ctrl->logs();
+                    } elseif ($method === 'DELETE' && $action === 'logs' && !empty($subAction)) {
+                        $ctrl->deleteLog((int)$subAction);
+                    } elseif ($method === 'DELETE' && !empty($action)) {
+                        $ctrl->deleteLog((int)$action);
+                    } else {
+                        $ctrl->getConfig();
                     }
                     break;
 

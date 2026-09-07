@@ -23,15 +23,15 @@ class UserService {
 
         $societyId = TenantContext::getSocietyId();
 
-        // If requester is a Parent User, or explicitly requesting all users, return all child societies + parent users
-        if ($isParentUser || !empty($filters['all_users']) || (isset($filters['include_all']) && $filters['include_all'])) {
+        // If explicitly requesting all users, or if in Global platform scope ($societyId === 0 or null)
+        if (!empty($filters['all_users']) || (isset($filters['include_all']) && $filters['include_all']) || ($isParentUser && ($societyId === 0 || $societyId === null))) {
             $users = $this->userModel->getAll(null, $filters);
         } elseif ($currentUser !== null && !$isParentUser) {
             // When a client society user is logged in, isolate strictly to their society
             $filters['include_parent'] = false;
             $users = $this->userModel->getAll($societyId, $filters);
         } else {
-            // Default unauthenticated / test context: return society users & parent staff
+            // Active society scope: return users for this society (including parent staff by default)
             $users = $this->userModel->getAll($societyId, $filters);
         }
         

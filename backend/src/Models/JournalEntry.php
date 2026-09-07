@@ -9,8 +9,9 @@ class JournalEntry extends BaseModel {
 
     public function getAllBySociety(int $societyId, ?string $from = null, ?string $to = null): array {
         $db = Database::getConnection();
-        $sql = "SELECT je.*, u.full_name as created_by_name 
+        $sql = "SELECT je.*, u.full_name as created_by_name, s.name as society_name, s.society_code 
             FROM {$this->table} je 
+            JOIN societies s ON je.society_id = s.id 
             LEFT JOIN users u ON je.created_by_user_id = u.id";
 
         if ($societyId > 0) {

@@ -56,6 +56,16 @@ class UnitController extends BaseController {
         }
     }
 
+    public function update(string $idOrCode): void {
+        $input = $this->getJsonInput();
+        try {
+            $updated = $this->unitService->updateUnit($idOrCode, $input);
+            $this->success($updated, 'Unit updated successfully');
+        } catch (Exception $e) {
+            $this->error($e->getMessage(), 400);
+        }
+    }
+
     public function batchCreate(): void {
         $input = $this->getJsonInput();
         try {

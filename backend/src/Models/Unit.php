@@ -94,6 +94,9 @@ class Unit extends BaseModel {
                 'tower' => $u['tower_name'],
                 'floor' => (int)$u['floor_number'],
                 'type' => $u['unit_type'],
+                'unit_type' => $u['unit_type'],
+                'sqft_area' => (float)($u['sqft_area'] ?? 1200),
+                'area' => (float)($u['sqft_area'] ?? 1200),
                 'status' => $u['occupancy_status'],
                 'ownerName' => $finalOwner,
                 'tenantName' => $finalTenant,
@@ -157,6 +160,81 @@ class Unit extends BaseModel {
             if (!empty($row['resolved_contact_email'])) $row['contact_email'] = $row['resolved_contact_email'];
         }
         return $row ?: null;
+    }
+
+    public function findById(int $id, ?int $societyId = null): ?array {
+        $societyId = ($societyId !== null) ? $societyId : $this->getSocietyId();
+        $sql = "SELECT u.*, t.name AS tower_name, t.tower_code FROM units u JOIN towers t ON u.tower_id = t.id WHERE u.id = ? AND u.is_deleted = 0";
+        $params = [$id];
+        if ($societyId > 0) {
+            $sql .= " AND u.society_id = ?";
+            $params[] = $societyId;
+        }
+        $sql .= " LIMIT 1";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute($params);
+        $row = $stmt->fetch();
+        return $row ?: null;
+    }
+
+    public function updateUnit(int $unitId, array $data, ?int $societyId = null): bool {
+        $societyId = ($societyId !== null) ? $societyId : $this->getSocietyId();
+        $fields = [];
+        $params = [];
+
+        if (isset($data['unit_type']) || isset($data['type'])) {
+            $fields[] = "unit_type = ?";
+            $params[] = trim($data['unit_type'] ?? $data['type']);
+        }
+        if (isset($data['sqft_area']) || isset($data['area']) || isset($data['area_sqft'])) {
+            $fields[] = "sqft_area = ?";
+            $params[] = (float)($data['sqft_area'] ?? $data['area'] ?? $data['area_sqft']);
+        }
+        if (isset($data['unit_code']) || isset($data['flatNumber'])) {
+            $fields[] = "unit_code = ?";
+            $params[] = strtoupper(trim($data['unit_code'] ?? $data['flatNumber']));
+        }
+        if (isset($data['floor_number']) || isset($data['floor'])) {
+            $fields[] = "floor_number = ?";
+            $params[] = (int)($data['floor_number'] ?? $data['floor']);
+        }
+        if (isset($data['occupancy_status']) || isset($data['status'])) {
+            $fields[] = "occupancy_status = ?";
+            $params[] = trim($data['occupancy_status'] ?? $data['status']);
+        }
+        if (isset($data['maintenance_status'])) {
+            $fields[] = "maintenance_status = ?";
+            $params[] = trim($data['maintenance_status']);
+        }
+        if (array_key_exists('owner_name', $data)) {
+            $fields[] = "owner_name = ?";
+            $params[] = $data['owner_name'];
+        }
+        if (array_key_exists('tenant_name', $data)) {
+            $fields[] = "tenant_name = ?";
+            $params[] = $data['tenant_name'];
+        }
+        if (array_key_exists('contact_phone', $data) || array_key_exists('phone', $data)) {
+            $fields[] = "contact_phone = ?";
+            $params[] = $data['contact_phone'] ?? $data['phone'];
+        }
+        if (array_key_exists('contact_email', $data) || array_key_exists('email', $data)) {
+            $fields[] = "contact_email = ?";
+            $params[] = $data['contact_email'] ?? $data['email'];
+        }
+
+        if (empty($fields)) {
+            return false;
+        }
+
+        $params[] = $unitId;
+        $sql = "UPDATE units SET " . implode(', ', $fields) . " WHERE id = ?";
+        if ($societyId > 0) {
+            $sql .= " AND society_id = ?";
+            $params[] = $societyId;
+        }
+        $stmt = $this->db->prepare($sql);
+        return $stmt->execute($params);
     }
 
     public function updateOccupancy(int $unitId, array $data, ?int $societyId = null): bool {

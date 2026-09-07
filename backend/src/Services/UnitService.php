@@ -35,10 +35,43 @@ class UnitService {
             throw new InvalidArgumentException("Unit number / code is required.");
         }
 
-        $towerId = (int)($data['tower_id'] ?? ($data['towerId'] ?? 1));
+        $towerId = (int)($data['tower_id'] ?? ($data['towerId'] ?? 0));
+        $societyId = !empty($data['society_id']) ? (int)$data['society_id'] : 0;
+        if ($towerId > 0 && $societyId <= 0) {
+            $towerObj = $this->towerModel->findById($towerId);
+            if ($towerObj && !empty($towerObj['society_id'])) {
+                $societyId = (int)$towerObj['society_id'];
+            }
+        }
+        if ($societyId <= 0) {
+            $societyId = TenantContext::resolve();
+        }
+        if ($towerId <= 0) {
+            $towerName = trim($data['tower'] ?? ($data['tower_name'] ?? ''));
+            if (!empty($towerName)) {
+                $resolvedTower = $this->towerModel->findByName($towerName, $societyId);
+                if (!$resolvedTower) {
+                    $socTowers = $this->towerModel->getBySocietyId($societyId);
+                    foreach ($socTowers as $st) {
+                        if (stripos($st['name'], $towerName) !== false || stripos($towerName, $st['name']) !== false) {
+                            $resolvedTower = $st;
+                            break;
+                        }
+                    }
+                }
+                if ($resolvedTower) {
+                    $towerId = (int)$resolvedTower['id'];
+                }
+            }
+        }
+        if ($towerId <= 0) {
+            $socTowers = $this->towerModel->getBySocietyId($societyId);
+            $towerId = !empty($socTowers) ? (int)$socTowers[0]['id'] : 1;
+        }
+
         $floorNumber = (int)($data['floor_number'] ?? ($data['floor'] ?? 1));
         $unitType = $data['unit_type'] ?? ($data['type'] ?? '2BHK');
-        $sqftArea = (int)($data['sqft_area'] ?? ($data['area_sqft'] ?? 1000));
+        $sqftArea = (float)($data['sqft_area'] ?? ($data['area'] ?? ($data['area_sqft'] ?? 1200)));
         $occupancyStatus = $data['occupancy_status'] ?? ($data['status'] ?? 'Vacant');
 
         $db = Database::getConnection();
@@ -49,6 +82,7 @@ class UnitService {
 
         try {
             $id = $this->unitModel->create([
+                'society_id' => $societyId,
                 'tower_id' => $towerId,
                 'unit_code' => $unitCode,
                 'floor_number' => $floorNumber,
@@ -61,6 +95,14 @@ class UnitService {
                 'contact_email' => $data['contact_email'] ?? ($data['email'] ?? null)
             ]);
 
+            // Sync total_units counts on tower and society
+            if ($towerId > 0) {
+                $db->prepare("UPDATE towers SET total_units = (SELECT COUNT(*) FROM units WHERE tower_id = ? AND is_deleted = 0) WHERE id = ?")->execute([$towerId, $towerId]);
+            }
+            if ($societyId > 0) {
+                $db->prepare("UPDATE societies SET total_units = (SELECT COUNT(*) FROM units WHERE society_id = ? AND is_deleted = 0) WHERE id = ?")->execute([$societyId, $societyId]);
+            }
+
             if ($manageTx) {
                 $db->commit();
             }
@@ -71,7 +113,68 @@ class UnitService {
                 'flatNumber' => $unitCode,
                 'floor' => $floorNumber,
                 'type' => $unitType,
+                'unit_type' => $unitType,
+                'sqft_area' => $sqftArea,
+                'area' => $sqftArea,
                 'status' => $occupancyStatus
+            ];
+        } catch (\Throwable $e) {
+            if ($manageTx && $db->inTransaction()) {
+                $db->rollBack();
+            }
+            throw $e;
+        }
+    }
+
+    public function updateUnit($idOrCode, array $data): array {
+        $societyId = TenantContext::resolve();
+        $unit = null;
+
+        // Try lookup by numeric ID first
+        if (is_numeric($idOrCode)) {
+            $unit = $this->unitModel->findById((int)$idOrCode, $societyId);
+        }
+
+        // Otherwise lookup by code / clean code
+        if (!$unit) {
+            $cleanCode = preg_replace('/^FLAT-/i', '', (string)$idOrCode);
+            $unit = $this->unitModel->findByCode($cleanCode, $societyId);
+            if (!$unit) {
+                $unit = $this->unitModel->findByCode((string)$idOrCode, $societyId);
+            }
+        }
+
+        if (!$unit) {
+            throw new InvalidArgumentException("Unit '{$idOrCode}' not found.");
+        }
+
+        $unitId = (int)$unit['id'];
+
+        $db = Database::getConnection();
+        $manageTx = !$db->inTransaction();
+        if ($manageTx) {
+            $db->beginTransaction();
+        }
+
+        try {
+            $this->unitModel->updateUnit($unitId, $data, $societyId);
+
+            if ($manageTx) {
+                $db->commit();
+            }
+
+            $refreshed = $this->unitModel->findById($unitId, $societyId);
+            return [
+                'id' => "FLAT-{$refreshed['unit_code']}",
+                'unitDbId' => $unitId,
+                'flatNumber' => $refreshed['unit_code'],
+                'tower' => $refreshed['tower_name'] ?? $unit['tower_name'],
+                'floor' => (int)$refreshed['floor_number'],
+                'type' => $refreshed['unit_type'],
+                'unit_type' => $refreshed['unit_type'],
+                'sqft_area' => (float)($refreshed['sqft_area'] ?? 1200),
+                'area' => (float)($refreshed['sqft_area'] ?? 1200),
+                'status' => $refreshed['occupancy_status']
             ];
         } catch (\Throwable $e) {
             if ($manageTx && $db->inTransaction()) {

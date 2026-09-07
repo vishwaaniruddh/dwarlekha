@@ -11,8 +11,9 @@ class Expense extends BaseModel {
         $db = Database::getConnection();
         $sql = "SELECT e.*, v.company_name as vendor_name, v.category as vendor_category, 
             coa.account_name as expense_account_name, coa.account_code as expense_account_code,
-            app.full_name as approved_by_name 
+            app.full_name as approved_by_name, s.name as society_name, s.society_code 
             FROM {$this->table} e 
+            JOIN societies s ON e.society_id = s.id 
             LEFT JOIN vendors v ON e.vendor_id = v.id 
             LEFT JOIN chart_of_accounts coa ON e.expense_account_id = coa.id 
             LEFT JOIN users app ON e.approved_by_user_id = app.id";
