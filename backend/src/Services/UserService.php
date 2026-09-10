@@ -195,7 +195,15 @@ class UserService {
 
             $updateData = [];
             if (isset($input['fullName'])) $updateData['full_name'] = trim($input['fullName']);
-            if (isset($input['email'])) $updateData['email'] = trim(strtolower($input['email']));
+            if (isset($input['email'])) {
+                $newEmail = trim(strtolower($input['email']));
+                $targetSoc = array_key_exists('societyId', $input) ? ($input['societyId'] ? (int)$input['societyId'] : null) : ($user['society_id'] ?? $societyId);
+                $existing = $this->userModel->findByEmail($newEmail, $targetSoc);
+                if ($existing && (int)$existing['id'] !== $id) {
+                    throw new Exception("The email '{$newEmail}' is already registered to another user.");
+                }
+                $updateData['email'] = $newEmail;
+            }
             if (isset($input['phone'])) $updateData['phone'] = $input['phone'];
             if (isset($input['unitCode'])) $updateData['unit_code'] = $input['unitCode'];
             if (isset($input['status'])) $updateData['status'] = $input['status'];
@@ -217,6 +225,33 @@ class UserService {
             }
 
             $this->userModel->update($id, $updateData, $societyId);
+
+            // If user is a resident or linked to a unit, keep unit occupancy contact updated
+            if (!empty($user['resident_id']) || !empty($user['unit_code'])) {
+                $unitCode = $updateData['unit_code'] ?? ($user['unit_code'] ?? null);
+                if ($unitCode) {
+                    $uStmt = $db->prepare("SELECT id, owner_name, tenant_name FROM units WHERE unit_code = ? AND society_id = ? AND is_deleted = 0 LIMIT 1");
+                    $uStmt->execute([$unitCode, $societyId]);
+                    $matchedUnit = $uStmt->fetch(\PDO::FETCH_ASSOC);
+                    if ($matchedUnit) {
+                        $unitUpdates = [];
+                        if (isset($updateData['phone'])) $unitUpdates['contact_phone'] = $updateData['phone'];
+                        if (isset($updateData['email'])) $unitUpdates['contact_email'] = $updateData['email'];
+                        if (isset($updateData['full_name'])) {
+                            if (!empty($matchedUnit['owner_name']) && $matchedUnit['owner_name'] === $user['full_name']) {
+                                $unitUpdates['owner_name'] = $updateData['full_name'];
+                            }
+                            if (!empty($matchedUnit['tenant_name']) && $matchedUnit['tenant_name'] === $user['full_name']) {
+                                $unitUpdates['tenant_name'] = $updateData['full_name'];
+                            }
+                        }
+                        if (!empty($unitUpdates)) {
+                            (new \App\Models\Unit())->updateOccupancy((int)$matchedUnit['id'], $unitUpdates, $societyId);
+                        }
+                    }
+                }
+            }
+
             $result = $this->getUserById($id);
 
             if ($manageTx) {

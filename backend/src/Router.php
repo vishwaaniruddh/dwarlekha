@@ -237,6 +237,8 @@ class Router {
                         $ctrl->deleteVehicle((int)$cleanAction, (int)$cleanSubParam);
                     } elseif ($method === 'DELETE' && is_numeric($cleanAction) && empty($subAction)) {
                         $ctrl->delete((int)$cleanAction);
+                    } elseif ($method === 'PUT' && is_numeric($cleanAction) && empty($subAction)) {
+                        $ctrl->update((int)$cleanAction);
                     } elseif ($method === 'PUT' && is_numeric($cleanAction) && $subAction === 'type') {
                         $ctrl->updateType((int)$cleanAction);
                     } else {

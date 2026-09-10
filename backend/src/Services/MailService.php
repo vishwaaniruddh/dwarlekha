@@ -348,8 +348,16 @@ class MailService {
     ): array {
         $config = $this->getSmtpConfig($societyId, false);
 
+        // Automatic Fallback: If tenant society has no active SMTP server, route through SAR Global Platform Master (society_id = 0)
+        if ((!$config || empty($config['is_active'])) && $societyId > 0) {
+            $globalConfig = $this->getSmtpConfig(0, false);
+            if ($globalConfig && !empty($globalConfig['is_active'])) {
+                $config = $globalConfig;
+            }
+        }
+
         if (!$config || empty($config['is_active'])) {
-            $err = "SMTP configuration is inactive or not configured for society #{$societyId}.";
+            $err = "SMTP configuration is inactive or not configured for " . ($societyId === 0 ? "SAR Global Platform" : "society #{$societyId} (no active global gateway)") . ".";
             $this->logEmail($societyId, $toEmail, $toName, $subject, $htmlBody, 'failed', $err);
             return ['success' => false, 'error' => $err];
         }

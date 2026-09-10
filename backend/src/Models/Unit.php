@@ -137,12 +137,12 @@ class Unit extends BaseModel {
             ) AS resolved_tenant_name
             FROM units u 
             JOIN towers t ON u.tower_id = t.id 
-            WHERE (u.unit_code = ? OR u.unit_code = ? OR u.unit_code LIKE ?)
+            WHERE (u.unit_code = ? OR u.unit_code = ? OR REPLACE(REPLACE(REPLACE(u.unit_code, '-', ''), ' ', ''), '_', '') = ? OR u.unit_code LIKE ?)
             AND u.is_deleted = 0";
 
         // Generate clean variants (e.g. C-106, C106, C 106)
         $altCode = str_replace(['-', ' ', '_'], '', $clean);
-        $params = [$clean, $altCode, "%{$clean}%"];
+        $params = [$clean, $altCode, $altCode, "%{$clean}%"];
 
         if ($societyId > 0) {
             $sql .= " AND u.society_id = ?";

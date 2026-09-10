@@ -16,10 +16,10 @@ class SmtpConfigController extends BaseController {
 
     private function resolveSocietyId(): int {
         $input = $this->getJsonInput();
-        if (!empty($input['society_id'])) {
+        if (isset($input['society_id']) && is_numeric($input['society_id'])) {
             return (int)$input['society_id'];
         }
-        if (!empty($_GET['society_id'])) {
+        if (isset($_GET['society_id']) && is_numeric($_GET['society_id'])) {
             return (int)$_GET['society_id'];
         }
         $tenantId = TenantContext::getSocietyId();
@@ -30,7 +30,10 @@ class SmtpConfigController extends BaseController {
         if (!empty($curr['societyId'])) {
             return (int)$curr['societyId'];
         }
-        return 1;
+        $isParent = !empty($curr['isParentUser']) || !empty($curr['is_parent_user']) || 
+                    ($curr['roleCode'] ?? '') === 'sar_platform_admin' || 
+                    ($curr['roleCode'] ?? '') === 'sar_support';
+        return $isParent ? 0 : 1;
     }
 
     /**
@@ -42,12 +45,13 @@ class SmtpConfigController extends BaseController {
             $config = $this->service->getSmtpConfig($societyId, true);
             
             if (!$config) {
-                // Return default empty template so UI is instantly populated
+                // Return default template so UI is instantly populated
+                $isGlobal = ($societyId === 0);
                 $config = [
                     'society_id' => $societyId,
-                    'sender_name' => 'Society Management Office',
-                    'sender_email' => '',
-                    'reply_to_email' => '',
+                    'sender_name' => $isGlobal ? 'SAR Master Platform (DwarLekha)' : 'Society Management Office',
+                    'sender_email' => $isGlobal ? 'notifications@sarsspl.com' : '',
+                    'reply_to_email' => $isGlobal ? 'support@sarsspl.com' : '',
                     'smtp_host' => 'smtp.gmail.com',
                     'smtp_port' => 587,
                     'smtp_encryption' => 'tls',

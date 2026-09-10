@@ -176,4 +176,14 @@ class ResidentController extends BaseController {
             $this->error($e->getMessage(), 400);
         }
     }
+
+    public function update(int $id): void {
+        $input = $this->getJsonInput();
+        try {
+            $updated = $this->residentService->updateResidentProfile($id, $input);
+            $this->success($updated, "Resident profile updated successfully.");
+        } catch (Exception $e) {
+            $this->error($e->getMessage(), 400);
+        }
+    }
 }

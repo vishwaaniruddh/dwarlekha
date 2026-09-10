@@ -190,16 +190,18 @@ class Resident extends BaseModel {
 
     public function findByEmailOrUnit(string $email, ?string $unitCode = null): ?array {
         if (!empty($email)) {
-            $stmt = $this->db->prepare("SELECT r.id FROM residents r LEFT JOIN users u ON r.user_id = u.id WHERE (r.email = ? OR u.email = ?) AND r.is_deleted = 0 ORDER BY r.id DESC LIMIT 1");
-            $stmt->execute([$email, $email]);
+            $stmt = $this->db->prepare("SELECT r.id FROM residents r JOIN users u ON r.user_id = u.id WHERE u.email = ? AND r.is_deleted = 0 ORDER BY r.id DESC LIMIT 1");
+            $stmt->execute([$email]);
             $row = $stmt->fetch();
             if ($row) {
                 return $this->findById((int)$row['id']);
             }
         }
         if (!empty($unitCode)) {
-            $stmt = $this->db->prepare("SELECT r.id FROM residents r JOIN units un ON r.unit_id = un.id WHERE un.unit_code = ? AND r.is_deleted = 0 ORDER BY r.id DESC LIMIT 1");
-            $stmt->execute([$unitCode]);
+            $cleanUnit = trim($unitCode);
+            $altCode = str_replace(['-', ' ', '_'], '', $cleanUnit);
+            $stmt = $this->db->prepare("SELECT r.id FROM residents r JOIN units un ON r.unit_id = un.id WHERE (un.unit_code = ? OR un.unit_code = ? OR REPLACE(REPLACE(REPLACE(un.unit_code, '-', ''), ' ', ''), '_', '') = ? OR un.unit_code LIKE ?) AND r.is_deleted = 0 ORDER BY r.id DESC LIMIT 1");
+            $stmt->execute([$cleanUnit, $altCode, $altCode, "%{$cleanUnit}%"]);
             $row = $stmt->fetch();
             if ($row) {
                 return $this->findById((int)$row['id']);

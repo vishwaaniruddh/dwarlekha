@@ -71,21 +71,78 @@ class ResidentService {
                 $cleanId = (int)($passport['resident_id'] ?? preg_replace('/^RES-/i', '', $passport['id']));
                 $stmt = $db->prepare("UPDATE residents SET user_id = ? WHERE id = ?");
                 $stmt->execute([$userId, $cleanId]);
+                $stmt2 = $db->prepare("UPDATE users SET resident_id = ? WHERE id = ?");
+                $stmt2->execute([$cleanId, $userId]);
                 $passport['user_id'] = $userId;
+                return $this->residentModel->findById($cleanId);
             }
             return $passport;
         }
 
         if (!empty($unitCode)) {
-            $unit = $this->unitModel->findByCode($unitCode, null);
+            $userSocietyId = !empty($currUser['society_id']) ? (int)$currUser['society_id'] : (!empty($currUser['societyId']) ? (int)$currUser['societyId'] : 0);
+            
+            // Search in user's society first, then search globally (0) if not found
+            $unit = $this->unitModel->findByCode($unitCode, $userSocietyId > 0 ? $userSocietyId : 0);
+            if (!$unit && $userSocietyId > 0) {
+                $unit = $this->unitModel->findByCode($unitCode, 0);
+            }
+
             if ($unit) {
-                $societyId = (int)($unit['society_id'] ?? TenantContext::getSocietyId());
+                $societyId = (int)($unit['society_id'] ?? ($userSocietyId > 0 ? $userSocietyId : TenantContext::getSocietyId()));
                 $db = Database::getConnection();
-                $roleType = (isset($currUser['role']['name']) && stripos($currUser['role']['name'], 'tenant') !== false) ? 'Tenant' : 'Owner';
-                $stmt = $db->prepare("INSERT INTO residents (society_id, user_id, unit_id, resident_type, is_primary_contact, move_in_date, verification_status) VALUES (?, ?, ?, ?, 1, CURDATE(), 'Pending')");
-                $stmt->execute([$societyId, $userId, (int)$unit['id'], $roleType]);
-                $newResId = (int)$db->lastInsertId();
-                return $this->residentModel->findById($newResId);
+                $manageTx = !$db->inTransaction();
+                if ($manageTx) {
+                    $db->beginTransaction();
+                }
+
+                try {
+                    $roleName = $currUser['role']['name'] ?? ($currUser['role_name'] ?? '');
+                    $roleType = (stripos($roleName, 'tenant') !== false) ? 'Tenant' : 'Owner';
+                    
+                    $newResId = $this->residentModel->create([
+                        'society_id' => $societyId,
+                        'user_id' => $userId,
+                        'unit_id' => (int)$unit['id'],
+                        'resident_type' => $roleType,
+                        'is_primary_contact' => 1,
+                        'move_in_date' => date('Y-m-d'),
+                        'verification_status' => 'Pending'
+                    ], $societyId);
+
+                    if ($userId) {
+                        $this->userModel->update($userId, [
+                            'resident_id' => $newResId,
+                            'unit_code' => $unit['unit_code']
+                        ], $societyId);
+                    }
+
+                    $userName = $currUser['full_name'] ?? ($currUser['fullName'] ?? 'Resident');
+                    $userPhone = $currUser['phone'] ?? null;
+                    $userEmail = $currUser['email'] ?? null;
+                    $occupancyStatus = ($roleType === 'Tenant') ? 'Occupied (Tenant)' : 'Occupied (Owner)';
+
+                    $this->unitModel->updateOccupancy((int)$unit['id'], [
+                        'occupancy_status' => $occupancyStatus,
+                        'owner_name' => ($roleType === 'Owner') ? $userName : (!empty($unit['owner_name']) ? $unit['owner_name'] : $userName),
+                        'tenant_name' => ($roleType === 'Tenant') ? $userName : null,
+                        'contact_phone' => $userPhone,
+                        'contact_email' => $userEmail
+                    ], $societyId);
+
+                    $this->residentModel->linkOccupancy((int)$unit['id'], $newResId, $roleType);
+
+                    if ($manageTx) {
+                        $db->commit();
+                    }
+
+                    return $this->residentModel->findById($newResId, $societyId);
+                } catch (\Throwable $e) {
+                    if ($manageTx && $db->inTransaction()) {
+                        $db->rollBack();
+                    }
+                    throw $e;
+                }
             }
         }
 
@@ -105,7 +162,7 @@ class ResidentService {
         $residentType = (strcasecmp($role, 'Tenant') === 0) ? 'Tenant' : 'Owner';
         $ownerName = !empty($input['owner_name']) ? trim($input['owner_name']) : (!empty($input['ownerName']) ? trim($input['ownerName']) : $name);
         $phone = $input['phone'] ?? '+91 98200-11223';
-        $email = $input['email'] ?? (strtolower(preg_replace('/[^a-z0-9]/', '.', $name)) . '@emerald.net');
+        $email = !empty($input['email']) ? trim(strtolower($input['email'])) : (trim(preg_replace('/[^a-z0-9]+/', '.', strtolower(trim($name))), '.') . '@emerald.net');
         $moveInDate = !empty($input['moveInDate']) ? $input['moveInDate'] : (!empty($input['move_in_date']) ? $input['move_in_date'] : date('Y-m-d'));
         if (strtotime($moveInDate) === false) {
             $moveInDate = date('Y-m-d');
@@ -358,7 +415,7 @@ class ResidentService {
 
         $societyId = (int)($resident['society_id'] ?? TenantContext::getSocietyId());
         $userId = $resident['user_id'] ?? null;
-        $email = $resident['email'] ?: (strtolower(preg_replace('/[^a-z0-9]/', '.', $resident['name'])) . '@emerald.net');
+        $email = !empty($resident['email']) ? trim(strtolower($resident['email'])) : (trim(preg_replace('/[^a-z0-9]+/', '.', strtolower(trim($resident['name'] ?? 'resident'))), '.') . '@emerald.net');
         $phone = $resident['phone'] ?: '+91 98200-11223';
         $newPassword = !empty($customPassword) ? trim($customPassword) : 'Welcome@123';
 
@@ -480,7 +537,28 @@ class ResidentService {
     }
 
     public function deleteDocument(int $docId): bool {
-        return $this->documentModel->delete($docId);
+        $db = \App\Config\Database::getConnection();
+        $manageTx = !$db->inTransaction();
+        if ($manageTx) {
+            $db->beginTransaction();
+        }
+
+        try {
+            $doc = $this->documentModel->findById($docId);
+            $deleted = $this->documentModel->delete($docId);
+            if ($deleted && $doc && !empty($doc['resident_id'])) {
+                $this->syncResidentKycRollup((int)$doc['resident_id']);
+            }
+            if ($manageTx) {
+                $db->commit();
+            }
+            return $deleted;
+        } catch (\Throwable $e) {
+            if ($manageTx && $db->inTransaction()) {
+                $db->rollBack();
+            }
+            throw $e;
+        }
     }
 
     public function verifyDocument(int $docId, string $status, ?string $rejectionReason = null): array {
@@ -488,12 +566,70 @@ class ResidentService {
         if (!in_array($status, $allowed)) {
             throw new \InvalidArgumentException("Status must be Pending, Approved, or Rejected.");
         }
-        $this->documentModel->updateVerificationStatus($docId, $status, $rejectionReason);
-        $doc = $this->documentModel->findById($docId);
-        if (!$doc) {
-            throw new \Exception("Document not found.");
+
+        $db = \App\Config\Database::getConnection();
+        $manageTx = !$db->inTransaction();
+        if ($manageTx) {
+            $db->beginTransaction();
         }
-        return $doc;
+
+        try {
+            $this->documentModel->updateVerificationStatus($docId, $status, $rejectionReason);
+            $doc = $this->documentModel->findById($docId);
+            if (!$doc) {
+                throw new \Exception("Document not found.");
+            }
+
+            if (!empty($doc['resident_id'])) {
+                $this->syncResidentKycRollup((int)$doc['resident_id']);
+            }
+
+            if ($manageTx) {
+                $db->commit();
+            }
+            return $doc;
+        } catch (\Throwable $e) {
+            if ($manageTx && $db->inTransaction()) {
+                $db->rollBack();
+            }
+            throw $e;
+        }
+    }
+
+    /**
+     * Synchronize resident overall verification status based on attached documents.
+     */
+    public function syncResidentKycRollup(int $residentId): void {
+        $docs = $this->documentModel->getByResidentId($residentId);
+        if (empty($docs)) {
+            return;
+        }
+
+        $allApproved = true;
+        $anyRejected = false;
+        $rejectReasons = [];
+
+        foreach ($docs as $d) {
+            $st = $d['verification_status'] ?? 'Pending';
+            if ($st !== 'Approved' && $st !== 'Verified') {
+                $allApproved = false;
+            }
+            if ($st === 'Rejected') {
+                $anyRejected = true;
+                if (!empty($d['rejection_reason'])) {
+                    $rejectReasons[] = $d['rejection_reason'];
+                }
+            }
+        }
+
+        if ($allApproved) {
+            $this->residentModel->updateVerificationStatus($residentId, 'Approved', null, null);
+        } elseif ($anyRejected) {
+            $reasonText = !empty($rejectReasons) ? implode('; ', $rejectReasons) : 'Document verification rejected';
+            $this->residentModel->updateVerificationStatus($residentId, 'Rejected', null, $reasonText);
+        } else {
+            $this->residentModel->updateVerificationStatus($residentId, 'Pending', null, null);
+        }
     }
 
     public function addVehicle(int $residentId, array $data): array {
@@ -692,6 +828,116 @@ class ResidentService {
             }
 
             return $this->residentModel->findById($residentId, $societyId) ?: ['id' => $residentId, 'resident_type' => $newType];
+        } catch (\Throwable $e) {
+            if ($manageTx && $db->inTransaction()) {
+                $db->rollBack();
+            }
+            throw $e;
+        }
+    }
+
+    /**
+     * Update resident profile details (name, email/username, phone, resident type, move-in date)
+     * and synchronize with linked user account and unit occupancy in a single transaction.
+     */
+    public function updateResidentProfile(int $residentId, array $input): array {
+        $resident = $this->residentModel->findById($residentId);
+        if (!$resident) {
+            throw new Exception("Resident record not found.");
+        }
+
+        $societyId = (int)($resident['society_id'] ?? TenantContext::getSocietyId());
+        $userId = $resident['user_id'] ?? null;
+        $unitId = (int)($resident['unit_id'] ?? 0);
+
+        $db = Database::getConnection();
+        $manageTx = !$db->inTransaction();
+        if ($manageTx) {
+            $db->beginTransaction();
+        }
+
+        try {
+            $name = !empty($input['name']) ? trim($input['name']) : (!empty($input['fullName']) ? trim($input['fullName']) : null);
+            $email = !empty($input['email']) ? trim(strtolower($input['email'])) : null;
+            $phone = !empty($input['phone']) ? trim($input['phone']) : null;
+            $residentType = !empty($input['resident_type']) ? trim($input['resident_type']) : (!empty($input['role']) ? trim($input['role']) : null);
+            $moveInDate = !empty($input['moveInDate']) ? $input['moveInDate'] : (!empty($input['move_in_date']) ? $input['move_in_date'] : null);
+
+            // 1. Email collision check
+            if ($email) {
+                $existing = $this->userModel->findByEmail($email, $societyId);
+                if ($existing && (int)$existing['id'] !== (int)$userId) {
+                    throw new Exception("The email '{$email}' is already registered to another user account.");
+                }
+            }
+
+            // 2. Update or create user account
+            if ($userId) {
+                $userUpdates = [];
+                if ($name !== null) $userUpdates['full_name'] = $name;
+                if ($email !== null) $userUpdates['email'] = $email;
+                if ($phone !== null) $userUpdates['phone'] = $phone;
+                if (!empty($input['password'])) {
+                    $userUpdates['password_hash'] = password_hash($input['password'], PASSWORD_BCRYPT);
+                }
+                if (!empty($userUpdates)) {
+                    $this->userModel->update((int)$userId, $userUpdates, $societyId);
+                }
+            } else {
+                $role = $this->roleModel->findByCode('resident', $societyId);
+                $roleId = $role ? (int)$role['id'] : 7;
+                $userCode = 'USR-' . rand(3000, 9999);
+                $tempPassword = 'Emerald@' . rand(1000, 9999);
+
+                $newUserId = $this->userModel->create([
+                    'user_code' => $userCode,
+                    'society_id' => $societyId,
+                    'is_parent_user' => 0,
+                    'full_name' => $name ?: 'Resident',
+                    'email' => $email ?: (trim(preg_replace('/[^a-z0-9]+/', '.', strtolower(trim($name ?: 'resident'))), '.') . '@emerald.net'),
+                    'password_hash' => password_hash($tempPassword, PASSWORD_BCRYPT),
+                    'role_id' => $roleId,
+                    'phone' => $phone ?: '+91 98200-11223',
+                    'unit_code' => $resident['unit_code'] ?? '',
+                    'resident_id' => $residentId,
+                    'status' => 'Active'
+                ], $societyId);
+
+                $this->residentModel->update($residentId, ['user_id' => $newUserId], $societyId);
+            }
+
+            // 3. Update resident table
+            $resUpdates = [];
+            if ($residentType && in_array(ucfirst(strtolower($residentType)), ['Owner', 'Tenant'])) {
+                $resUpdates['resident_type'] = ucfirst(strtolower($residentType));
+            }
+            if ($moveInDate && strtotime($moveInDate) !== false) {
+                $resUpdates['move_in_date'] = $moveInDate;
+            }
+            if (!empty($resUpdates)) {
+                $this->residentModel->update($residentId, $resUpdates, $societyId);
+            }
+
+            // 4. Update Unit occupancy contact if this resident is primary owner/tenant
+            if ($unitId > 0) {
+                $unitUpdates = [];
+                $currentType = $resident['resident_type'] ?? 'Tenant';
+                if ($name !== null) {
+                    if ($currentType === 'Owner') $unitUpdates['owner_name'] = $name;
+                    if ($currentType === 'Tenant') $unitUpdates['tenant_name'] = $name;
+                }
+                if ($phone !== null) $unitUpdates['contact_phone'] = $phone;
+                if ($email !== null) $unitUpdates['contact_email'] = $email;
+                if (!empty($unitUpdates)) {
+                    $this->unitModel->updateOccupancy($unitId, $unitUpdates, $societyId);
+                }
+            }
+
+            if ($manageTx) {
+                $db->commit();
+            }
+
+            return $this->getResidentPassport($residentId) ?: ['id' => $residentId, 'success' => true];
         } catch (\Throwable $e) {
             if ($manageTx && $db->inTransaction()) {
                 $db->rollBack();
