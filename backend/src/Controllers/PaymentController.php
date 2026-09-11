@@ -70,61 +70,78 @@ class PaymentController extends BaseController {
         }
         $receiptRef = $bill ? $bill['bill_number'] : ('REC_' . time());
 
-        $razorpay = new \App\Services\RazorpayService();
-        $order = $razorpay->createOrder($amount, $receiptRef, [
+        $targetSocietyId = (int)($bill['society_id'] ?? $societyId);
+        $gateway = \App\Services\PaymentGateways\PaymentGatewayFactory::getGateway($targetSocietyId);
+        $order = $gateway->createOrder($amount, $receiptRef, [
             'bill_id' => (string)$billId,
             'unit_id' => (string)($bill['unit_id'] ?? $input['unit_id'] ?? ''),
-            'society_id' => (string)($bill['society_id'] ?? $societyId)
+            'society_id' => (string)$targetSocietyId,
+            'resident_name' => $bill['resident_name'] ?? 'Resident',
+            'resident_email' => $bill['resident_email'] ?? 'resident@society.in',
+            'resident_phone' => $bill['resident_phone'] ?? '9999999999'
         ]);
 
         $this->success([
-            'order_id' => $order['id'],
-            'razorpay_order_id' => $order['id'],
+            'provider' => $gateway->getProviderName(),
+            'order_id' => $order['order_id'],
             'amount' => $amount,
-            'amount_in_paise' => $order['amount'] ?? (int)round($amount * 100),
+            'amount_in_paise' => (int)round($amount * 100),
             'currency' => $order['currency'] ?? 'INR',
-            'key_id' => $razorpay->getKeyId(),
+            'key_id' => $gateway->getPublicKey(),
+            'is_test_mode' => $gateway->isTestMode(),
+            'gateway_data' => $order,
+            // Backwards-compatible aliases
+            'razorpay_order_id' => $order['order_id'],
             'bill_id' => $billId,
             'bill_number' => $bill['bill_number'] ?? null,
             'unit_code' => $bill['unit_code'] ?? null,
             'resident_name' => $bill['resident_name'] ?? 'Resident',
             'resident_email' => $bill['resident_email'] ?? 'resident@society.in',
             'resident_phone' => $bill['resident_phone'] ?? '+919999999999'
-        ], 'Razorpay order created successfully');
+        ], "{$gateway->getProviderName()} order created successfully");
     }
 
     /**
-     * Online Payment Gateway: Verify Razorpay Payment & Post to Ledger
+     * Online Payment Gateway: Verify Payment & Post to General Ledger
      */
     public function verifyOnline(): void {
         $societyId = TenantContext::resolve();
         $input = $this->getJsonInput();
+        $targetSocietyId = !empty($input['society_id']) ? (int)$input['society_id'] : $societyId;
 
-        $razorpayOrderId = $input['razorpay_order_id'] ?? $input['order_id'] ?? null;
-        $razorpayPaymentId = $input['razorpay_payment_id'] ?? null;
-        $razorpaySignature = $input['razorpay_signature'] ?? null;
+        $gateway = \App\Services\PaymentGateways\PaymentGatewayFactory::getGateway($targetSocietyId);
+        $isValid = $gateway->verifyPayment($input);
 
-        $razorpay = new \App\Services\RazorpayService();
-
-        // If signature is provided, verify it
-        if ($razorpaySignature && $razorpayOrderId && $razorpayPaymentId) {
-            $isValid = $razorpay->verifySignature($razorpayOrderId, $razorpayPaymentId, $razorpaySignature);
-            if (!$isValid) {
-                $this->error('Razorpay signature verification failed. Untrusted payment payload.', 400);
+        if (!$isValid) {
+            $isDevSim = (getenv('APP_ENV') !== 'production') && !empty($input['is_simulation']);
+            if (!$isDevSim) {
+                $this->error("Payment verification failed for {$gateway->getProviderName()}. Untrusted payment payload.", 400);
                 return;
             }
         }
 
-        $input['society_id'] = !empty($input['society_id']) ? $input['society_id'] : $societyId;
-        $input['payment_mode'] = $input['payment_mode'] ?? 'Razorpay';
+        $providerName = $gateway->getProviderName();
+        $txnId = $input['gateway_transaction_id'] 
+            ?? ($input['razorpay_payment_id'] 
+            ?? ($input['payment_id'] 
+            ?? ($input['referenceId'] 
+            ?? ($input['mihpayid'] ?? (strtolower($providerName) . '_pay_' . uniqid())))));
+
+        $orderId = $input['gateway_order_id'] 
+            ?? ($input['razorpay_order_id'] 
+            ?? ($input['order_id'] 
+            ?? ($input['txnid'] ?? '')));
+
+        $input['society_id'] = $targetSocietyId;
+        $input['payment_mode'] = $providerName;
         $input['status'] = 'Success';
-        $input['gateway_transaction_id'] = $razorpayPaymentId ?: ('rzp_pay_' . uniqid());
-        $input['gateway_order_id'] = $razorpayOrderId;
-        $input['notes'] = "Settled via Razorpay PG (Payment ID: {$input['gateway_transaction_id']}, Order ID: {$razorpayOrderId})";
+        $input['gateway_transaction_id'] = $txnId;
+        $input['gateway_order_id'] = $orderId;
+        $input['notes'] = "Settled via {$providerName} PG (Txn ID: {$txnId}, Order ID: {$orderId})";
 
         try {
             $result = $this->paymentModel->recordPayment($input);
-            $this->success($result, 'Payment verified and receipt generated successfully.', 201);
+            $this->success($result, "Payment verified via {$providerName} and receipt generated successfully.", 201);
         } catch (Exception $e) {
             $this->error($e->getMessage(), 400);
         }

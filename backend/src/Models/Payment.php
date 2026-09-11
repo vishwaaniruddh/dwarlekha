@@ -188,23 +188,65 @@ class Payment extends BaseModel {
     }
 
     private function applySuccessfulPaymentEffects(PDO $db, int $societyId, int $unitId, ?int $billId, float $amount, string $paymentMode, string $receiptNumber, ?int $userId): void {
-        // Update specific bill or oldest unpaid bills
-        if ($billId) {
-            $stmtBill = $db->prepare("SELECT total_amount, paid_amount, outstanding_amount FROM bills WHERE id = ? LIMIT 1");
+        $remainingPayment = $amount;
+
+        // 1. If specific bill is indicated, pay towards it first
+        if ($billId && $remainingPayment > 0) {
+            $stmtBill = $db->prepare("SELECT id, total_amount, paid_amount, outstanding_amount FROM bills WHERE id = ? AND is_deleted = 0 LIMIT 1");
             $stmtBill->execute([$billId]);
             $bill = $stmtBill->fetch(PDO::FETCH_ASSOC);
 
             if ($bill) {
                 $billTotal = (float)$bill['total_amount'];
                 $currentPaid = (float)$bill['paid_amount'];
-                $newPaid = min($billTotal, $currentPaid + $amount);
+                $currentDue = max(0.00, (float)$bill['outstanding_amount']);
+
+                $applied = min($currentDue, $remainingPayment);
+                $newPaid = $currentPaid + $applied;
                 $newOutstanding = max(0.00, $billTotal - $newPaid);
                 $newStatus = ($newOutstanding <= 0.01) ? 'Paid' : 'Partially_Paid';
 
                 $db->prepare("UPDATE bills SET paid_amount = ?, outstanding_amount = ?, status = ? WHERE id = ?")
                     ->execute([$newPaid, $newOutstanding, $newStatus, $billId]);
+
+                $remainingPayment -= $applied;
             }
         }
+
+        // 2. FIFO Cascade: If unallocated payment remains (or billId was omitted), apply to oldest unpaid bills for this unit
+        if ($remainingPayment > 0.001 && $unitId > 0) {
+            $fifoStmt = $db->prepare("SELECT id, total_amount, paid_amount, outstanding_amount 
+                FROM bills 
+                WHERE unit_id = ? AND status != 'Paid' AND outstanding_amount > 0.01 AND is_deleted = 0 
+                ORDER BY bill_date ASC, id ASC");
+            $fifoStmt->execute([$unitId]);
+            $pendingBills = $fifoStmt->fetchAll(PDO::FETCH_ASSOC);
+
+            foreach ($pendingBills as $pb) {
+                if ($remainingPayment <= 0.001) break;
+
+                $pbId = (int)$pb['id'];
+                if ($billId && $pbId === $billId) continue; // Already processed above
+
+                $bTotal = (float)$pb['total_amount'];
+                $bCurrentPaid = (float)$pb['paid_amount'];
+                $bDue = max(0.00, (float)$pb['outstanding_amount']);
+
+                $applied = min($bDue, $remainingPayment);
+                $bNewPaid = $bCurrentPaid + $applied;
+                $bNewDue = max(0.00, $bTotal - $bNewPaid);
+                $bNewStatus = ($bNewDue <= 0.01) ? 'Paid' : 'Partially_Paid';
+
+                $db->prepare("UPDATE bills SET paid_amount = ?, outstanding_amount = ?, status = ? WHERE id = ?")
+                    ->execute([$bNewPaid, $bNewDue, $bNewStatus, $pbId]);
+
+                $remainingPayment -= $applied;
+            }
+        }
+
+        // 3. Synchronize unit maintenance status
+        $billModel = new Bill();
+        $billModel->syncUnitMaintenanceStatus($societyId);
 
         // Post Double-Entry Journal (Debit: Bank/Cash, Credit: Accounts Receivable)
         $coaModel = new ChartOfAccount();

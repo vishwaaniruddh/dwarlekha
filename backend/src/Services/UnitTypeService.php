@@ -16,25 +16,29 @@ class UnitTypeService {
 
     public function getUnitTypes(): array {
         $societyId = TenantContext::getSocietyId();
-        $types = $this->unitTypeModel->getAll($societyId);
-        
-        $formatted = [];
-        foreach ($types as $t) {
-            $formatted[] = [
-                'id' => (int)$t['id'],
-                'societyId' => $t['society_id'] ? (int)$t['society_id'] : null,
-                'typeName' => $t['type_name'],
-                'type' => $t['type_name'],
-                'badgeColor' => $t['badge_color'] ?? 'blue',
-                'typicalArea' => $t['typical_area'],
-                'area' => $t['typical_area'],
-                'standardSqft' => (int)$t['standard_sqft'],
-                'useCase' => $t['use_case'],
-                'isSystemStandard' => (bool)$t['is_system_standard'],
-                'createdAt' => $t['created_at'] ?? null
-            ];
-        }
-        return $formatted;
+        $cacheKey = 'unit_types_society_' . $societyId;
+
+        return CacheService::remember($cacheKey, 86400, function() use ($societyId) {
+            $types = $this->unitTypeModel->getAll($societyId);
+            
+            $formatted = [];
+            foreach ($types as $t) {
+                $formatted[] = [
+                    'id' => (int)$t['id'],
+                    'societyId' => $t['society_id'] ? (int)$t['society_id'] : null,
+                    'typeName' => $t['type_name'],
+                    'type' => $t['type_name'],
+                    'badgeColor' => $t['badge_color'] ?? 'blue',
+                    'typicalArea' => $t['typical_area'],
+                    'area' => $t['typical_area'],
+                    'standardSqft' => (int)$t['standard_sqft'],
+                    'useCase' => $t['use_case'],
+                    'isSystemStandard' => (bool)$t['is_system_standard'],
+                    'createdAt' => $t['created_at'] ?? null
+                ];
+            }
+            return $formatted;
+        });
     }
 
     public function createUnitType(array $input): array {
@@ -52,6 +56,8 @@ class UnitTypeService {
             if ($manageTx) {
                 $db->commit();
             }
+
+            CacheService::forget('unit_types_society_' . $societyId);
 
             return [
                 'id' => (int)$created['id'],
@@ -87,6 +93,7 @@ class UnitTypeService {
             if ($manageTx) {
                 $db->commit();
             }
+            CacheService::forget('unit_types_society_' . $societyId);
             return $res;
         } catch (\Throwable $e) {
             if ($manageTx && $db->inTransaction()) {

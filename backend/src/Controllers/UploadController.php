@@ -18,11 +18,33 @@ class UploadController extends BaseController {
                 return;
             }
 
-            $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
-            $allowed = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'mp4', 'mov', 'm4v', 'webm'];
-            if (!in_array($ext, $allowed)) {
-                $this->error('Invalid file type. Allowed: JPG, PNG, GIF, WEBP, MP4, MOV, WEBM', 400);
+            $maxBytes = 15 * 1024 * 1024; // 15MB max
+            if ($file['size'] > $maxBytes) {
+                $this->error('File size exceeds 15MB limit.', 400);
                 return;
+            }
+
+            $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+            $allowedExts = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'mp4', 'mov', 'm4v', 'webm'];
+            if (!in_array($ext, $allowedExts, true)) {
+                $this->error('Invalid file extension. Allowed: JPG, PNG, GIF, WEBP, MP4, MOV, WEBM', 400);
+                return;
+            }
+
+            // Verify MIME magic bytes
+            if (function_exists('finfo_open')) {
+                $finfo = finfo_open(FILEINFO_MIME_TYPE);
+                $mime = finfo_file($finfo, $file['tmp_name']);
+                finfo_close($finfo);
+
+                $allowedMimes = [
+                    'image/jpeg', 'image/pjpeg', 'image/png', 'image/gif', 'image/webp',
+                    'video/mp4', 'video/quicktime', 'video/webm', 'video/x-m4v'
+                ];
+                if (!in_array($mime, $allowedMimes, true)) {
+                    $this->error('Invalid file content type: ' . $mime, 400);
+                    return;
+                }
             }
 
             $filename = 'media_' . time() . '_' . bin2hex(random_bytes(4)) . '.' . $ext;

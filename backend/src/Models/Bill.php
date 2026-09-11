@@ -8,6 +8,9 @@ class Bill extends BaseModel {
     protected string $table = 'bills';
 
     public function getAllBySociety(int $societyId, array $filters = []): array {
+        // Automatically synchronize overdue bills and unit maintenance states
+        $this->syncOverdueStatus($societyId);
+
         $db = Database::getConnection();
         $sql = "SELECT b.*, u.unit_code, u.sqft_area, u.floor_number, t.name as tower_name, 
             COALESCE(
@@ -358,4 +361,82 @@ class Bill extends BaseModel {
             throw $e;
         }
     }
+
+    /**
+     * Automatic Overdue Synchronization
+     * Scans for any active bill where due_date < CURDATE() and outstanding_amount > 0.01,
+     * transitioning status to 'Overdue' and updating unit maintenance flags.
+     */
+    public function syncOverdueStatus(?int $societyId = null): int {
+        $db = Database::getConnection();
+        $sql = "UPDATE {$this->table} 
+                SET status = 'Overdue' 
+                WHERE status IN ('Unpaid', 'Partially_Paid', 'Pending') 
+                  AND due_date < CURDATE() 
+                  AND outstanding_amount > 0.01 
+                  AND is_deleted = 0";
+        $params = [];
+        if ($societyId !== null && $societyId > 0) {
+            $sql .= " AND society_id = ?";
+            $params[] = $societyId;
+        }
+        $stmt = $db->prepare($sql);
+        $stmt->execute($params);
+        $updatedCount = $stmt->rowCount();
+
+        $this->syncUnitMaintenanceStatus($societyId);
+        return $updatedCount;
+    }
+
+    /**
+     * Synchronize Units Maintenance Status Flag ('Paid', 'Pending', 'Overdue')
+     * Guarantees that the Flats inventory and resident passports accurately reflect financial standing.
+     */
+    public function syncUnitMaintenanceStatus(?int $societyId = null): void {
+        $db = Database::getConnection();
+
+        // 1. Units with Overdue Bills -> 'Overdue'
+        $sqlOverdue = "UPDATE units u 
+            JOIN (
+                SELECT DISTINCT unit_id 
+                FROM {$this->table} 
+                WHERE status = 'Overdue' AND outstanding_amount > 0.01 AND is_deleted = 0
+            ) b ON u.id = b.unit_id 
+            SET u.maintenance_status = 'Overdue' 
+            WHERE u.is_deleted = 0";
+        if ($societyId !== null && $societyId > 0) {
+            $sqlOverdue .= " AND u.society_id = " . (int)$societyId;
+        }
+        $db->exec($sqlOverdue);
+
+        // 2. Units with Unpaid/Pending Bills (not overdue) -> 'Pending'
+        $sqlPending = "UPDATE units u 
+            JOIN (
+                SELECT DISTINCT unit_id 
+                FROM {$this->table} 
+                WHERE status IN ('Unpaid', 'Partially_Paid', 'Pending') AND outstanding_amount > 0.01 AND is_deleted = 0
+            ) b ON u.id = b.unit_id 
+            SET u.maintenance_status = 'Pending' 
+            WHERE u.maintenance_status != 'Overdue' AND u.is_deleted = 0";
+        if ($societyId !== null && $societyId > 0) {
+            $sqlPending .= " AND u.society_id = " . (int)$societyId;
+        }
+        $db->exec($sqlPending);
+
+        // 3. Units with All Dues Cleared -> 'Paid'
+        $sqlPaid = "UPDATE units u 
+            LEFT JOIN (
+                SELECT unit_id, SUM(outstanding_amount) as total_due 
+                FROM {$this->table} 
+                WHERE is_deleted = 0 
+                GROUP BY unit_id
+            ) b ON u.id = b.unit_id 
+            SET u.maintenance_status = 'Paid' 
+            WHERE (b.total_due IS NULL OR b.total_due <= 0.01) AND u.maintenance_status != 'Paid' AND u.is_deleted = 0";
+        if ($societyId !== null && $societyId > 0) {
+            $sqlPaid .= " AND u.society_id = " . (int)$societyId;
+        }
+        $db->exec($sqlPaid);
+    }
 }
+

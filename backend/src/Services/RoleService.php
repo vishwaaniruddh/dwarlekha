@@ -41,23 +41,29 @@ class RoleService {
     }
 
     public function getPermissionsCatalog(): array {
-        return [
-            'all' => $this->permissionModel->getAll(),
-            'grouped' => $this->permissionModel->getGroupedByModule()
-        ];
+        return CacheService::remember('permissions_catalog', 86400, function() {
+            return [
+                'all' => $this->permissionModel->getAll(),
+                'grouped' => $this->permissionModel->getGroupedByModule()
+            ];
+        });
     }
 
     public function getRolePermissionMatrix(): array {
-        $roles = $this->getRoles();
-        $permissions = $this->permissionModel->getAll();
-        $groupedPerms = $this->permissionModel->getGroupedByModule();
+        $societyId = TenantContext::getSocietyId();
+        $cacheKey = 'role_perm_matrix_' . ($societyId ?? 'all');
 
-        $matrix = [];
-        foreach ($roles as $role) {
-            $permCodes = array_column($role['permissions'], 'permission_code');
-            $matrix[$role['role_code']] = [
-                'roleId' => (int)$role['id'],
-                'roleCode' => $role['role_code'],
+        return CacheService::remember($cacheKey, 86400, function() {
+            $roles = $this->getRoles();
+            $permissions = $this->permissionModel->getAll();
+            $groupedPerms = $this->permissionModel->getGroupedByModule();
+
+            $matrix = [];
+            foreach ($roles as $role) {
+                $permCodes = array_column($role['permissions'], 'permission_code');
+                $matrix[$role['role_code']] = [
+                    'roleId' => (int)$role['id'],
+                    'roleCode' => $role['role_code'],
                 'roleName' => $role['name'],
                 'badgeColor' => $role['badge_color'],
                 'description' => $role['description'],
@@ -72,6 +78,7 @@ class RoleService {
             'permissions' => $permissions,
             'groupedPermissions' => $groupedPerms
         ];
+        });
     }
 
     public function createRole(array $input): array {
@@ -134,6 +141,9 @@ class RoleService {
             if ($manageTx) {
                 $db->commit();
             }
+
+            CacheService::flush('role_');
+            CacheService::flush('permissions_');
 
             return $result;
         } catch (\Throwable $e) {

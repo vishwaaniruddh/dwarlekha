@@ -13,10 +13,25 @@ class AuthController extends BaseController {
 
     public function login(): void {
         $input = $this->getJsonInput();
+        $email = trim($input['email'] ?? '');
+        $rateKey = \App\Services\RateLimiterService::resolveKey($email);
+
+        if (\App\Services\RateLimiterService::tooManyAttempts($rateKey)) {
+            $seconds = \App\Services\RateLimiterService::availableIn($rateKey);
+            $minutes = max(1, ceil($seconds / 60));
+            if (!headers_sent()) {
+                header("Retry-After: {$seconds}");
+            }
+            $this->error("Too many failed login attempts. Please try again in {$minutes} minute(s).", 429);
+            return;
+        }
+
         try {
-            $result = $this->authService->login($input['email'] ?? '', $input['password'] ?? '');
+            $result = $this->authService->login($email, $input['password'] ?? '');
+            \App\Services\RateLimiterService::clear($rateKey);
             $this->success($result, 'Login successful');
         } catch (Exception $e) {
+            \App\Services\RateLimiterService::hit($rateKey);
             $this->error($e->getMessage(), 401);
         }
     }

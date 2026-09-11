@@ -587,6 +587,40 @@ class Router {
                     }
                     break;
 
+                // 15b. Multi-Tenant Payment Gateway Configurations
+                case 'payment-gateways':
+                case 'payment-gateway':
+                case 'gateways':
+                    $ctrl = new \App\Controllers\PaymentGatewayConfigController();
+                    if ($method === 'GET') {
+                        $ctrl->index();
+                    } elseif ($method === 'POST' && $action === 'test') {
+                        $ctrl->test();
+                    } elseif ($method === 'POST') {
+                        $ctrl->save();
+                    } elseif ($method === 'DELETE' && !empty($action)) {
+                        $ctrl->delete((int)$action);
+                    } else {
+                        $ctrl->index();
+                    }
+                    break;
+
+                // 16. Security Audit Trail & Activity Stream
+                case 'audit':
+                case 'audit-logs':
+                case 'audits':
+                    $ctrl = new \App\Controllers\AuditLogController();
+                    if ($method === 'POST' && ($action === 'log' || $action === 'event')) {
+                        $ctrl->logEvent();
+                    } elseif ($method === 'GET' && $action === 'actions') {
+                        $ctrl->actions();
+                    } elseif ($method === 'GET' && $action === 'file') {
+                        $ctrl->fileLogs();
+                    } else {
+                        $ctrl->index();
+                    }
+                    break;
+
                 default:
                     // Health check & endpoint directory
                     http_response_code(200);

@@ -12,30 +12,33 @@ class FinancialReport {
     public function getTrialBalance(int $societyId, ?string $from = null, ?string $to = null): array {
         $db = Database::getConnection();
         
-        $sql = "SELECT coa.id, coa.account_code, coa.account_name, coa.account_type,
-            COALESCE(SUM(ji.debit_amount), 0.00) as total_debit,
-            COALESCE(SUM(ji.credit_amount), 0.00) as total_credit
-            FROM chart_of_accounts coa
-            LEFT JOIN journal_items ji ON coa.id = ji.account_id
-            LEFT JOIN journal_entries je ON ji.journal_entry_id = je.id AND je.is_deleted = 0";
-        
-        $where = ["coa.is_deleted = 0"];
+        $jeConditions = ["je.is_deleted = 0"];
         $params = [];
-        if ($societyId > 0) {
-            $where[] = "coa.society_id = ?";
-            $params[] = $societyId;
-        }
 
         if ($from) {
-            $where[] = "(je.entry_date >= ? OR je.entry_date IS NULL)";
+            $jeConditions[] = "je.entry_date >= ?";
             $params[] = $from;
         }
         if ($to) {
-            $where[] = "(je.entry_date <= ? OR je.entry_date IS NULL)";
+            $jeConditions[] = "je.entry_date <= ?";
             $params[] = $to;
         }
 
-        $sql .= " WHERE " . implode(" AND ", $where);
+        $jeJoinOn = implode(" AND ", $jeConditions);
+
+        $sql = "SELECT coa.id, coa.account_code, coa.account_name, coa.account_type,
+            COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN ji.debit_amount ELSE 0.00 END), 0.00) as total_debit,
+            COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN ji.credit_amount ELSE 0.00 END), 0.00) as total_credit
+            FROM chart_of_accounts coa
+            LEFT JOIN journal_items ji ON coa.id = ji.account_id
+            LEFT JOIN journal_entries je ON ji.journal_entry_id = je.id AND {$jeJoinOn}
+            WHERE coa.is_deleted = 0";
+        
+        if ($societyId > 0) {
+            $sql .= " AND coa.society_id = ?";
+            $params[] = $societyId;
+        }
+
         $sql .= " GROUP BY coa.id, coa.account_code, coa.account_name, coa.account_type ORDER BY coa.account_code ASC";
 
         $stmt = $db->prepare($sql);

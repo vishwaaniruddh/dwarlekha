@@ -8,6 +8,10 @@ use PDO;
 class SyncService {
     public const SYNC_SECRET = 'DwarLekha@Sync2026';
 
+    public static function getSyncSecret(): string {
+        return getenv('SYNC_SECRET') ?: self::SYNC_SECRET;
+    }
+
     // Canonical list of tables in dependency order
     private const ORDERED_TABLES = [
         'societies',

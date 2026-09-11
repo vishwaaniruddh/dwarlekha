@@ -16,8 +16,8 @@ class SyncController extends BaseController {
         $headers = function_exists('getallheaders') ? getallheaders() : [];
         $syncKey = $headers['X-Sync-Key'] ?? $headers['x-sync-key'] ?? ($_SERVER['HTTP_X_SYNC_KEY'] ?? '');
         $input = $this->getJsonInput();
-        $inputKey = $input['secret_key'] ?? $_GET['secret_key'] ?? '';
-        if (($syncKey && $syncKey === SyncService::SYNC_SECRET) || ($inputKey && $inputKey === SyncService::SYNC_SECRET)) {
+        $expectedSecret = SyncService::getSyncSecret();
+        if (($syncKey && $syncKey === $expectedSecret) || ($inputKey && $inputKey === $expectedSecret)) {
             return;
         }
 

@@ -12,21 +12,25 @@ class GeoService {
     }
 
     public function getCountries(): array {
-        try {
-            $stmt = $this->db->query("SELECT id, name, status FROM countries WHERE status = 'active' ORDER BY id ASC, name ASC");
-            return $stmt->fetchAll(PDO::FETCH_ASSOC);
-        } catch (\Throwable $e) {
-            return [];
-        }
+        return CacheService::remember('geo_countries_active', 604800, function() {
+            try {
+                $stmt = $this->db->query("SELECT id, name, status FROM countries WHERE status = 'active' ORDER BY id ASC, name ASC");
+                return $stmt->fetchAll(PDO::FETCH_ASSOC);
+            } catch (\Throwable $e) {
+                return [];
+            }
+        });
     }
 
     public function getZones(): array {
-        try {
-            $stmt = $this->db->query("SELECT id, name, status FROM zones WHERE status = 'active' ORDER BY id ASC");
-            return $stmt->fetchAll(PDO::FETCH_ASSOC);
-        } catch (\Throwable $e) {
-            return [];
-        }
+        return CacheService::remember('geo_zones_active', 604800, function() {
+            try {
+                $stmt = $this->db->query("SELECT id, name, status FROM zones WHERE status = 'active' ORDER BY id ASC");
+                return $stmt->fetchAll(PDO::FETCH_ASSOC);
+            } catch (\Throwable $e) {
+                return [];
+            }
+        });
     }
 
     public function getStates(?int $countryId = null, ?int $zoneId = null): array {

@@ -309,6 +309,12 @@ class VisitorService {
                 throw new Exception("Visitor not found.");
             }
 
+            // Verify approval status before admitting inside
+            $approvalStatus = $vis['approval_status'] ?? 'Pending Approval';
+            if ($approvalStatus !== 'Approved' && $approvalStatus !== 'Auto-Approved') {
+                throw new Exception("Visitor cannot be admitted inside without approval. Current status: '{$approvalStatus}'.");
+            }
+
             $actualCode = $vis['visitor_code'] ?? ($vis['id'] ?? $visitorCode);
             $result = $this->visitorModel->allowInside($actualCode);
             if ($manageTx) {

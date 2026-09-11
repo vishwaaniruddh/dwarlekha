@@ -14,6 +14,28 @@ abstract class BaseController {
         
         Logger::logRequest($method, $route, $this->cachedInput, $statusCode, $data, $durationMs);
 
+        // Automatically log every API mutation or HTTP error to AuditService
+        if (($method !== 'GET' || $statusCode >= 400) && !str_starts_with($route, 'audit')) {
+            $sanitizedInput = $this->cachedInput;
+            if (is_array($sanitizedInput)) {
+                if (isset($sanitizedInput['password'])) $sanitizedInput['password'] = '******';
+                if (isset($sanitizedInput['password_hash'])) $sanitizedInput['password_hash'] = '******';
+            }
+            \App\Services\AuditService::log(
+                action: "API_{$method}:/{$route}",
+                entityType: 'api_request',
+                entityId: (string)$statusCode,
+                details: [
+                    'method' => $method,
+                    'route' => $route,
+                    'status' => $statusCode,
+                    'duration_ms' => round($durationMs, 2),
+                    'payload' => $sanitizedInput,
+                    'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? 'Unknown'
+                ]
+            );
+        }
+
         if (!headers_sent()) {
             http_response_code($statusCode);
         }

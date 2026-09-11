@@ -6,8 +6,8 @@ class RazorpayService {
     private string $keySecret;
 
     public function __construct(?string $keyId = null, ?string $keySecret = null) {
-        $this->keyId = $keyId ?: 'rzp_test_4gwWqpQ2mlWxfH';
-        $this->keySecret = $keySecret ?: 'e5DXo5IJdIkBO3apRU5zhCVd';
+        $this->keyId = $keyId ?: (getenv('RAZORPAY_KEY_ID') ?: 'rzp_test_4gwWqpQ2mlWxfH');
+        $this->keySecret = $keySecret ?: (getenv('RAZORPAY_KEY_SECRET') ?: 'e5DXo5IJdIkBO3apRU5zhCVd');
     }
 
     public function getKeyId(): string {

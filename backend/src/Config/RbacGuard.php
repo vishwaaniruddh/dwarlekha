@@ -35,11 +35,22 @@ class RbacGuard {
         self::$currentUser = $user;
     }
 
+    public static function isDemoMode(): bool {
+        // Never allow unauthenticated super_admin in production
+        if (getenv('APP_ENV') === 'production') {
+            return false;
+        }
+        return getenv('APP_DEMO_MODE') === '1' || defined('APP_DEMO_MODE');
+    }
+
     public static function hasPermission(string $permissionCode): bool {
+        if (php_sapi_name() === 'cli') {
+            return true;
+        }
+
         $user = self::getCurrentUser();
         if (!$user) {
-            // If no user session is provided in request, allow pass-through
-            return true;
+            return self::isDemoMode();
         }
 
         $role = $user['role']['code'] ?? '';
@@ -52,14 +63,35 @@ class RbacGuard {
     }
 
     public static function requirePermission(string $permissionCode): array {
+        // Allow CLI execution (unit tests, migrations, seeders)
+        if (php_sapi_name() === 'cli') {
+            $user = self::getCurrentUser();
+            return $user ?: ['id' => 1, 'name' => 'CLI Admin', 'role' => ['code' => 'super_admin', 'name' => 'CLI Super Admin']];
+        }
+
         $user = self::getCurrentUser();
         if (!$user) {
-            // Allow unauthenticated demo mode if header not provided
-            return ['id' => 1, 'role' => ['code' => 'super_admin']];
+            if (self::isDemoMode()) {
+                return ['id' => 1, 'name' => 'Demo Admin', 'role' => ['code' => 'super_admin', 'name' => 'Demo Super Admin']];
+            }
+
+            if (!headers_sent()) {
+                http_response_code(401);
+                header('Content-Type: application/json');
+            }
+            echo json_encode([
+                'success' => false,
+                'error' => 'Unauthenticated. Valid Bearer authorization token required.',
+                'code' => 'UNAUTHENTICATED'
+            ]);
+            exit;
         }
 
         if (!self::hasPermission($permissionCode)) {
-            http_response_code(403);
+            if (!headers_sent()) {
+                http_response_code(403);
+                header('Content-Type: application/json');
+            }
             echo json_encode([
                 'success' => false,
                 'error' => "Forbidden: You do not have permission '{$permissionCode}' to perform this action.",
