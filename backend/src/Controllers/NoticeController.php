@@ -17,7 +17,8 @@ class NoticeController extends BaseController {
         if (isset($_GET['society_id'])) {
             $societyId = (int)$_GET['society_id'];
         }
-        $notices = $this->noticeService->getNotices($societyId);
+        $sortOrder = $_GET['sort'] ?? ($_GET['order'] ?? 'DESC');
+        $notices = $this->noticeService->getNotices($societyId, $sortOrder);
         $this->success($notices);
     }
 

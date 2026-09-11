@@ -195,8 +195,10 @@ class Payment extends BaseModel {
             $bill = $stmtBill->fetch(PDO::FETCH_ASSOC);
 
             if ($bill) {
-                $newPaid = (float)$bill['paid_amount'] + $amount;
-                $newOutstanding = max(0.00, (float)$bill['total_amount'] - $newPaid);
+                $billTotal = (float)$bill['total_amount'];
+                $currentPaid = (float)$bill['paid_amount'];
+                $newPaid = min($billTotal, $currentPaid + $amount);
+                $newOutstanding = max(0.00, $billTotal - $newPaid);
                 $newStatus = ($newOutstanding <= 0.01) ? 'Paid' : 'Partially_Paid';
 
                 $db->prepare("UPDATE bills SET paid_amount = ?, outstanding_amount = ?, status = ? WHERE id = ?")

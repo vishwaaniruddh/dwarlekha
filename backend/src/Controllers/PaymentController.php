@@ -64,6 +64,10 @@ class PaymentController extends BaseController {
         // Fetch Bill & Unit info
         $billModel = new \App\Models\Bill();
         $bill = $billId ? $billModel->findByIdWithItems($billId) : null;
+        if ($bill && ($bill['status'] === 'Paid' || (float)$bill['outstanding_amount'] <= 0.01)) {
+            $this->error('This bill has already been fully paid and reconciled.', 400);
+            return;
+        }
         $receiptRef = $bill ? $bill['bill_number'] : ('REC_' . time());
 
         $razorpay = new \App\Services\RazorpayService();

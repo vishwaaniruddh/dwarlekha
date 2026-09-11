@@ -161,6 +161,121 @@ class Notification extends BaseModel {
     }
 
     /**
+     * Send Notice Notification to occupants of selected units / flats
+     */
+    public function notifyNoticeTargeted(int $societyId, array $noticeData, array $targetUnitCodesOrIds): array {
+        $db = Database::getConnection();
+        if (empty($targetUnitCodesOrIds)) {
+            return ['notified_users_count' => 0, 'notified_units_count' => 0];
+        }
+
+        $cleanTargets = array_values(array_filter(array_map('trim', $targetUnitCodesOrIds)));
+        if (empty($cleanTargets)) {
+            return ['notified_users_count' => 0, 'notified_units_count' => 0];
+        }
+
+        // 1. Resolve unit IDs and unit codes
+        $inPlaceholders = implode(',', array_fill(0, count($cleanTargets), '?'));
+        
+        $sql = "SELECT u.id as unit_id, u.unit_code, u.society_id, r.id as resident_id, r.user_id, usr.full_name, usr.email, usr.phone
+                FROM units u
+                LEFT JOIN unit_occupancies uo ON u.id = uo.unit_id AND uo.is_deleted = 0
+                LEFT JOIN residents r ON uo.resident_id = r.id AND r.is_deleted = 0
+                LEFT JOIN users usr ON r.user_id = usr.id AND usr.is_deleted = 0
+                WHERE u.society_id = ? AND u.is_deleted = 0 
+                AND (u.unit_code IN ($inPlaceholders) OR u.id IN ($inPlaceholders))";
+        
+        $params = array_merge([$societyId], $cleanTargets, $cleanTargets);
+        $stmt = $db->prepare($sql);
+        $stmt->execute($params);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $noticeTitle = $noticeData['title'] ?? 'Notice Announcement';
+        $noticeCode = $noticeData['notice_code'] ?? ($noticeData['id'] ?? 'NTC');
+        $rawContent = $noticeData['content'] ?? '';
+        $snippet = strlen($rawContent) > 120 ? substr($rawContent, 0, 117) . '...' : $rawContent;
+
+        $notifiedUsers = [];
+        $unitsNotified = [];
+
+        foreach ($rows as $row) {
+            $unitId = (int)$row['unit_id'];
+            $unitCode = $row['unit_code'];
+            $userId = !empty($row['user_id']) ? (int)$row['user_id'] : null;
+
+            $unitsNotified[$unitCode] = true;
+
+            $title = "📢 Notice for Flat {$unitCode}: {$noticeTitle}";
+            $msg = "A circular has been issued for your flat {$unitCode}: {$snippet}";
+
+            if ($userId && !in_array($userId, $notifiedUsers)) {
+                $notifiedUsers[] = $userId;
+                $this->create([
+                    'society_id' => $societyId,
+                    'user_id' => $userId,
+                    'unit_id' => $unitId,
+                    'target_role' => 'resident',
+                    'type' => 'NOTICE_TARGETED',
+                    'title' => $title,
+                    'message' => $msg,
+                    'data_payload' => [
+                        'notice_code' => $noticeCode,
+                        'notice_title' => $noticeTitle,
+                        'category' => $noticeData['category'] ?? 'General',
+                        'priority' => $noticeData['priority'] ?? 'Normal',
+                        'unit_code' => $unitCode,
+                        'unit_id' => $unitId
+                    ]
+                ]);
+            }
+        }
+
+        // For units that have no registered user accounts, create unit-scoped notification
+        $allMatchedUnits = [];
+        foreach ($rows as $row) {
+            $allMatchedUnits[(int)$row['unit_id']] = $row['unit_code'];
+        }
+
+        foreach ($allMatchedUnits as $uId => $uCode) {
+            $hasUser = false;
+            foreach ($rows as $row) {
+                if ((int)$row['unit_id'] === $uId && !empty($row['user_id'])) {
+                    $hasUser = true;
+                    break;
+                }
+            }
+
+            if (!$hasUser) {
+                $title = "📢 Notice for Flat {$uCode}: {$noticeTitle}";
+                $msg = "A circular has been issued for your flat {$uCode}: {$snippet}";
+
+                $this->create([
+                    'society_id' => $societyId,
+                    'user_id' => null,
+                    'unit_id' => $uId,
+                    'target_role' => 'resident',
+                    'type' => 'NOTICE_TARGETED',
+                    'title' => $title,
+                    'message' => $msg,
+                    'data_payload' => [
+                        'notice_code' => $noticeCode,
+                        'notice_title' => $noticeTitle,
+                        'category' => $noticeData['category'] ?? 'General',
+                        'priority' => $noticeData['priority'] ?? 'Normal',
+                        'unit_code' => $uCode,
+                        'unit_id' => $uId
+                    ]
+                ]);
+            }
+        }
+
+        return [
+            'notified_users_count' => count($notifiedUsers),
+            'notified_units_count' => count($unitsNotified)
+        ];
+    }
+
+    /**
      * Get Notifications for a user / role / society
      */
     public function getForUser(int $societyId, ?int $userId = null, ?string $roleCode = null, ?int $unitId = null): array {
