@@ -12,15 +12,25 @@ class AuditLogController extends BaseController {
         $isSarAdmin = !empty($currentUser['isParentUser']) || 
                       in_array($currentUser['role']['code'] ?? '', ['super_admin', 'sar_platform_admin', 'sar_support'], true);
 
-        $societyId = TenantContext::getSocietyId();
+        $activeResolvedSocId = TenantContext::resolve();
 
         // Non-SAR admins can strictly only see their own society
-        if (!$isSarAdmin && !empty($currentUser['societyId'])) {
-            $societyId = (int)$currentUser['societyId'];
-        } elseif ($isSarAdmin && isset($_GET['society_id']) && $_GET['society_id'] !== '' && $_GET['society_id'] !== 'GLOBAL') {
-            $societyId = (int)$_GET['society_id'];
-        } elseif ($isSarAdmin && (empty($_GET['society_id']) || $_GET['society_id'] === 'GLOBAL')) {
-            $societyId = null; // Global stream
+        if (!$isSarAdmin) {
+            $userSocId = $currentUser['societyId'] ?? ($currentUser['society_id'] ?? null);
+            $societyId = !empty($userSocId) ? (int)$userSocId : ($activeResolvedSocId > 0 ? $activeResolvedSocId : 1);
+        } else {
+            // SAR platform admin
+            if (isset($_GET['society_id']) && $_GET['society_id'] !== '') {
+                $rawSoc = strtoupper(trim((string)$_GET['society_id']));
+                if ($rawSoc === 'GLOBAL' || $rawSoc === 'ALL' || $rawSoc === '0') {
+                    $societyId = null; // Explicitly selected Global Stream
+                } else {
+                    $societyId = (int)$_GET['society_id'];
+                }
+            } else {
+                // If society_id is not passed in GET, strictly adhere to active workspace society
+                $societyId = ($activeResolvedSocId > 0) ? $activeResolvedSocId : null;
+            }
         }
 
         $page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
@@ -48,6 +58,10 @@ class AuditLogController extends BaseController {
      * POST /audit/log
      */
     public function logEvent(): void {
+        $currentUser = RbacGuard::getCurrentUser();
+        $isSarAdmin = !empty($currentUser['isParentUser']) || 
+                      in_array($currentUser['role']['code'] ?? '', ['super_admin', 'sar_platform_admin', 'sar_support'], true);
+
         $input = $this->getJsonInput();
         $action = trim($input['action'] ?? 'PAGE_VIEW');
         $entityType = $input['entity_type'] ?? 'ui';
@@ -55,8 +69,13 @@ class AuditLogController extends BaseController {
         $details = $input['details'] ?? null;
 
         $societyId = null;
-        if (!empty($input['society_id'])) {
+        if (!empty($input['society_id']) && $isSarAdmin) {
             $societyId = (int)$input['society_id'];
+        } elseif (!$isSarAdmin && !empty($currentUser['societyId'] ?? ($currentUser['society_id'] ?? null))) {
+            $societyId = (int)($currentUser['societyId'] ?? $currentUser['society_id']);
+        } else {
+            $resolved = TenantContext::resolve();
+            $societyId = $resolved > 0 ? $resolved : null;
         }
 
         $success = AuditService::log($action, $entityType, $entityId, $details, $societyId);

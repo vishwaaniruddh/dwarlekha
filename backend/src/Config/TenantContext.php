@@ -8,6 +8,21 @@ class TenantContext {
     public static function resolve(): int {
         $pdo = Database::getConnection();
 
+        // 0. Security Isolation: If user is authenticated and is a tenant user (non-SAR admin),
+        // enforce their assigned society strictly to prevent cross-tenant parameter tampering
+        $currUser = RbacGuard::getCurrentUser();
+        $isSarAdmin = $currUser && (!empty($currUser['isParentUser']) || 
+                      in_array($currUser['role']['code'] ?? '', ['super_admin', 'sar_platform_admin', 'sar_support'], true));
+
+        if ($currUser && !$isSarAdmin) {
+            $userSocId = (int)($currUser['societyId'] ?? ($currUser['society_id'] ?? 0));
+            if ($userSocId > 0) {
+                self::$societyId = $userSocId;
+                self::$societyCode = $currUser['societyCode'] ?? ($currUser['society_code'] ?? null);
+                return self::$societyId;
+            }
+        }
+
         // 1. Check HTTP Header (X-Society-ID or X-Tenant-ID)
         $headerCode = $_SERVER['HTTP_X_SOCIETY_ID'] ?? ($_SERVER['HTTP_X_TENANT_ID'] ?? null);
 
@@ -25,6 +40,9 @@ class TenantContext {
 
             if (is_numeric($target)) {
                 self::$societyId = (int)$target;
+                $stmt = $pdo->prepare("SELECT society_code FROM societies WHERE id = ? LIMIT 1");
+                $stmt->execute([self::$societyId]);
+                self::$societyCode = $stmt->fetchColumn() ?: null;
             } else {
                 $stmt = $pdo->prepare("SELECT id, society_code FROM societies WHERE society_code = ? OR name = ? LIMIT 1");
                 $stmt->execute([$target, $target]);

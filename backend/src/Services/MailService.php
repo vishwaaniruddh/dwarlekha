@@ -554,4 +554,185 @@ class MailService {
         </div>
         ";
     }
+
+    /**
+     * Send Maintenance Bill / Invoice Notification to Resident
+     */
+    public function sendInvoiceNotification(int $societyId, array $inv): array {
+        $toEmail = $inv['resident_email'] ?? $inv['contact_email'] ?? null;
+        if (empty($toEmail) || !filter_var($toEmail, FILTER_VALIDATE_EMAIL)) {
+            return ['success' => false, 'error' => 'Invalid or missing resident email address.'];
+        }
+
+        $residentName = htmlspecialchars($inv['resident_name'] ?? 'Resident');
+        $unitCode = htmlspecialchars($inv['unit_code'] ?? 'NA');
+        $billNo = htmlspecialchars($inv['bill_number'] ?? 'NA');
+        $amount = number_format((float)($inv['amount'] ?? 0), 2);
+        $dueDate = htmlspecialchars($inv['due_date'] ?? date('Y-m-15'));
+        $period = htmlspecialchars(($inv['billing_period_start'] ?? '') . ' to ' . ($inv['billing_period_end'] ?? ''));
+        $societyName = htmlspecialchars($inv['society_name'] ?? 'Housing Society Office');
+        $bankDetails = htmlspecialchars($inv['bank_name'] ?? '');
+        $ifsc = htmlspecialchars($inv['bank_ifsc'] ?? '');
+        $accNo = htmlspecialchars($inv['bank_account_no'] ?? '');
+        $upiVpa = htmlspecialchars($inv['upi_vpa'] ?? '');
+
+        $subject = "Maintenance Bill: {$billNo} for Unit {$unitCode} [₹{$amount}] · {$societyName}";
+
+        $body = "
+        <div style=\"font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 580px; margin: 0 auto; background: #FFFFFF; border: 1px solid #E4E4E7; border-radius: 14px; overflow: hidden; color: #18181B;\">
+          <div style=\"padding: 24px 28px; background: #18181B; color: #FAFAFA;\">
+            <h2 style=\"margin: 0; font-size: 18px; font-weight: 700;\">Maintenance Invoice Generated</h2>
+            <div style=\"font-size: 12px; opacity: 0.8; margin-top: 4px;\">{$societyName}</div>
+          </div>
+          <div style=\"padding: 28px;\">
+            <p style=\"font-size: 14px; line-height: 1.6; margin: 0 0 16px 0;\">
+              Dear {$residentName},<br><br>
+              Your monthly maintenance invoice for <strong>Unit {$unitCode}</strong> has been generated for the period <strong>{$period}</strong>.
+            </p>
+            <div style=\"background: #F4F4F5; border: 1px solid #E4E4E7; border-radius: 10px; padding: 18px; margin: 20px 0;\">
+              <div style=\"display: flex; justify-content: space-between; margin-bottom: 8px;\">
+                <span style=\"font-size: 12px; color: #71717A;\">Invoice Number:</span>
+                <span style=\"font-size: 12.5px; font-weight: 600; font-family: monospace;\">{$billNo}</span>
+              </div>
+              <div style=\"display: flex; justify-content: space-between; margin-bottom: 8px;\">
+                <span style=\"font-size: 12px; color: #71717A;\">Due Date:</span>
+                <span style=\"font-size: 12.5px; font-weight: 600; color: #DC2626;\">{$dueDate}</span>
+              </div>
+              <div style=\"border-top: 1px solid #E4E4E7; margin-top: 10px; padding-top: 10px; display: flex; justify-content: space-between; align-items: center;\">
+                <span style=\"font-size: 13px; font-weight: 700;\">Total Payable:</span>
+                <span style=\"font-size: 20px; font-weight: 800; font-family: monospace;\">₹{$amount}</span>
+              </div>
+            </div>
+            " . (!empty($bankDetails) || !empty($upiVpa) ? "
+            <div style=\"background: #FAFAFA; border: 1px dashed #E4E4E7; border-radius: 8px; padding: 14px; margin-bottom: 20px; font-size: 12px; line-height: 1.6;\">
+              <strong>Direct Bank Settlement:</strong><br>
+              Bank: {$bankDetails} | A/C: {$accNo} | IFSC: {$ifsc}<br>
+              " . (!empty($upiVpa) ? "UPI VPA: <strong>{$upiVpa}</strong>" : "") . "
+            </div>" : "") . "
+            <p style=\"font-size: 12.5px; color: #71717A; line-height: 1.5; margin: 0;\">
+              You can settle this invoice securely via UPI, Credit/Debit Card, or NetBanking directly from your resident portal.
+            </p>
+          </div>
+          <div style=\"padding: 14px 28px; background: #FAFAFA; border-top: 1px solid #E4E4E7; font-size: 11px; color: #A1A1AA; text-align: center;\">
+            {$societyName} · Automated Billing Services
+          </div>
+        </div>";
+
+        return $this->send($societyId, $toEmail, $subject, $body, $residentName);
+    }
+
+    /**
+     * Send Payment Receipt Confirmation Notification
+     */
+    public function sendPaymentReceiptNotification(int $societyId, array $pay): array {
+        $toEmail = $pay['resident_email'] ?? $pay['contact_email'] ?? null;
+        if (empty($toEmail) || !filter_var($toEmail, FILTER_VALIDATE_EMAIL)) {
+            return ['success' => false, 'error' => 'Invalid or missing resident email address.'];
+        }
+
+        $residentName = htmlspecialchars($pay['resident_name'] ?? 'Resident');
+        $unitCode = htmlspecialchars($pay['unit_code'] ?? 'NA');
+        $receiptNo = htmlspecialchars($pay['receipt_number'] ?? $pay['payment_code'] ?? 'NA');
+        $amount = number_format((float)($pay['amount'] ?? 0), 2);
+        $mode = htmlspecialchars($pay['payment_mode'] ?? 'Online Gateway');
+        $societyName = htmlspecialchars($pay['society_name'] ?? 'Housing Society Office');
+        $paidDate = htmlspecialchars($pay['payment_date'] ?? date('d M Y, h:i A'));
+
+        $subject = "Payment Receipt: {$receiptNo} Confirmed [₹{$amount}] · {$societyName}";
+
+        $body = "
+        <div style=\"font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 580px; margin: 0 auto; background: #FFFFFF; border: 1px solid #E4E4E7; border-radius: 14px; overflow: hidden; color: #18181B;\">
+          <div style=\"padding: 24px 28px; background: #18181B; color: #FAFAFA;\">
+            <h2 style=\"margin: 0; font-size: 18px; font-weight: 700;\">Payment Received & Confirmed</h2>
+            <div style=\"font-size: 12px; opacity: 0.8; margin-top: 4px;\">{$societyName}</div>
+          </div>
+          <div style=\"padding: 28px;\">
+            <p style=\"font-size: 14px; line-height: 1.6; margin: 0 0 16px 0;\">
+              Dear {$residentName},<br><br>
+              We have successfully received and credited your payment of <strong>₹{$amount}</strong> for <strong>Unit {$unitCode}</strong>.
+            </p>
+            <div style=\"background: #ECFDF5; border: 1px solid #A7F3D0; border-radius: 10px; padding: 18px; margin: 20px 0;\">
+              <div style=\"display: flex; justify-content: space-between; margin-bottom: 8px;\">
+                <span style=\"font-size: 12px; color: #065F46;\">Receipt Number:</span>
+                <span style=\"font-size: 12.5px; font-weight: 600; font-family: monospace; color: #047857;\">{$receiptNo}</span>
+              </div>
+              <div style=\"display: flex; justify-content: space-between; margin-bottom: 8px;\">
+                <span style=\"font-size: 12px; color: #065F46;\">Payment Mode:</span>
+                <span style=\"font-size: 12.5px; font-weight: 600; color: #047857;\">{$mode}</span>
+              </div>
+              <div style=\"display: flex; justify-content: space-between; margin-bottom: 8px;\">
+                <span style=\"font-size: 12px; color: #065F46;\">Received On:</span>
+                <span style=\"font-size: 12.5px; font-weight: 600; color: #047857;\">{$paidDate}</span>
+              </div>
+              <div style=\"border-top: 1px solid #A7F3D0; margin-top: 10px; padding-top: 10px; display: flex; justify-content: space-between; align-items: center;\">
+                <span style=\"font-size: 13px; font-weight: 700; color: #065F46;\">Amount Settled:</span>
+                <span style=\"font-size: 20px; font-weight: 800; font-family: monospace; color: #047857;\">₹{$amount}</span>
+              </div>
+            </div>
+            <p style=\"font-size: 12.5px; color: #71717A; line-height: 1.5; margin: 0;\">
+              This receipt has been recorded in the General Ledger. You can view or download the signed PDF receipt anytime in your portal.
+            </p>
+          </div>
+          <div style=\"padding: 14px 28px; background: #FAFAFA; border-top: 1px solid #E4E4E7; font-size: 11px; color: #A1A1AA; text-align: center;\">
+            {$societyName} · Accounts & Finance Office
+          </div>
+        </div>";
+
+        return $this->send($societyId, $toEmail, $subject, $body, $residentName);
+    }
+
+    /**
+     * Send Overdue Payment Reminder Notice
+     */
+    public function sendOverdueReminder(int $societyId, array $inv): array {
+        $toEmail = $inv['resident_email'] ?? $inv['contact_email'] ?? null;
+        if (empty($toEmail) || !filter_var($toEmail, FILTER_VALIDATE_EMAIL)) {
+            return ['success' => false, 'error' => 'Invalid or missing resident email address.'];
+        }
+
+        $residentName = htmlspecialchars($inv['resident_name'] ?? 'Resident');
+        $unitCode = htmlspecialchars($inv['unit_code'] ?? 'NA');
+        $billNo = htmlspecialchars($inv['bill_number'] ?? 'NA');
+        $amount = number_format((float)($inv['amount'] ?? 0), 2);
+        $dueDate = htmlspecialchars($inv['due_date'] ?? 'Past Due');
+        $societyName = htmlspecialchars($inv['society_name'] ?? 'Housing Society Office');
+
+        $subject = "Urgent Reminder: Overdue Maintenance Dues for Unit {$unitCode} [₹{$amount}] · {$societyName}";
+
+        $body = "
+        <div style=\"font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 580px; margin: 0 auto; background: #FFFFFF; border: 1px solid #E4E4E7; border-radius: 14px; overflow: hidden; color: #18181B;\">
+          <div style=\"padding: 24px 28px; background: #DC2626; color: #FAFAFA;\">
+            <h2 style=\"margin: 0; font-size: 18px; font-weight: 700;\">Overdue Maintenance Dues Notice</h2>
+            <div style=\"font-size: 12px; opacity: 0.9; margin-top: 4px;\">{$societyName}</div>
+          </div>
+          <div style=\"padding: 28px;\">
+            <p style=\"font-size: 14px; line-height: 1.6; margin: 0 0 16px 0;\">
+              Dear {$residentName},<br><br>
+              This is a friendly reminder that maintenance dues for <strong>Unit {$unitCode}</strong> (Invoice: <strong>{$billNo}</strong>) were due on <strong>{$dueDate}</strong> and remain outstanding.
+            </p>
+            <div style=\"background: #FEF2F2; border: 1px solid #FECACA; border-radius: 10px; padding: 18px; margin: 20px 0;\">
+              <div style=\"display: flex; justify-content: space-between; margin-bottom: 8px;\">
+                <span style=\"font-size: 12px; color: #991B1B;\">Invoice Number:</span>
+                <span style=\"font-size: 12.5px; font-weight: 600; font-family: monospace; color: #991B1B;\">{$billNo}</span>
+              </div>
+              <div style=\"display: flex; justify-content: space-between; margin-bottom: 8px;\">
+                <span style=\"font-size: 12px; color: #991B1B;\">Past Due Date:</span>
+                <span style=\"font-size: 12.5px; font-weight: 700; color: #DC2626;\">{$dueDate}</span>
+              </div>
+              <div style=\"border-top: 1px solid #FECACA; margin-top: 10px; padding-top: 10px; display: flex; justify-content: space-between; align-items: center;\">
+                <span style=\"font-size: 13px; font-weight: 700; color: #991B1B;\">Outstanding Amount:</span>
+                <span style=\"font-size: 20px; font-weight: 800; font-family: monospace; color: #DC2626;\">₹{$amount}</span>
+              </div>
+            </div>
+            <p style=\"font-size: 12.5px; color: #71717A; line-height: 1.5; margin: 0;\">
+              Please clear these dues at your earliest convenience to avoid late fee penalties or disruption of society amenities.
+            </p>
+          </div>
+          <div style=\"padding: 14px 28px; background: #FAFAFA; border-top: 1px solid #E4E4E7; font-size: 11px; color: #A1A1AA; text-align: center;\">
+            {$societyName} · Management Committee
+          </div>
+        </div>";
+
+        return $this->send($societyId, $toEmail, $subject, $body, $residentName);
+    }
 }

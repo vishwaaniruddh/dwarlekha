@@ -40,19 +40,22 @@ require_once __DIR__ . '/../vendor/autoload.php';
 use App\Config\Database;
 use App\Models\Bill;
 use App\Services\AuditService;
+use App\Services\MailService;
 
 // Parse Options
 $options = [];
 if ($isCli) {
-    $rawOpts = getopt('', ['task::', 'force', 'dry-run', 'society_id::']);
+    $rawOpts = getopt('', ['task::', 'force', 'dry-run', 'society_id::', 'send-emails']);
     $options['task'] = $rawOpts['task'] ?? 'all';
     $options['force'] = isset($rawOpts['force']);
     $options['dry_run'] = isset($rawOpts['dry-run']);
+    $options['send_emails'] = isset($rawOpts['send-emails']);
     $options['society_id'] = isset($rawOpts['society_id']) ? (int)$rawOpts['society_id'] : null;
 } else {
     $options['task'] = $_GET['task'] ?? 'all';
     $options['force'] = isset($_GET['force']);
     $options['dry_run'] = isset($_GET['dry_run']) || isset($_GET['dry-run']);
+    $options['send_emails'] = isset($_GET['send_emails']) || isset($_GET['send-emails']);
     $options['society_id'] = !empty($_GET['society_id']) ? (int)$_GET['society_id'] : null;
 }
 
@@ -120,6 +123,21 @@ if (in_array($options['task'], ['all', 'daily', 'overdue'])) {
             $billModel->syncUnitMaintenanceStatus($socId);
             $summary['overdue_invoices_synced'] += $syncedCount;
             cliLog("  • {$socName}: {$syncedCount} invoice(s) transitioned to 'Overdue'.");
+
+            if ($options['send_emails'] && $syncedCount > 0) {
+                $mailService = new MailService($db);
+                $overdueBills = $db->query("SELECT id FROM bills WHERE society_id = {$socId} AND status = 'Overdue' AND is_deleted = 0")->fetchAll(\PDO::FETCH_COLUMN);
+                $emailsSent = 0;
+                foreach ($overdueBills as $bId) {
+                    $billDetail = $billModel->findByIdWithItems((int)$bId);
+                    if ($billDetail && !empty($billDetail['resident_email'])) {
+                        $mRes = $mailService->sendOverdueReminder($socId, $billDetail);
+                        if (!empty($mRes['success'])) $emailsSent++;
+                    }
+                }
+                cliLog("    ↳ Dispatched {$emailsSent} overdue email reminder(s).");
+                $summary['emails_sent'] = ($summary['emails_sent'] ?? 0) + $emailsSent;
+            }
         }
     }
 }
@@ -207,6 +225,20 @@ if ($shouldRunMonthlyBills) {
                 $summary['bills_generated'] += $res['count'];
                 $summary['bills_amount_generated'] += $res['total_amount'];
                 cliLog("  • {$socName}: Generated {$res['count']} bills (Total: ₹" . number_format($res['total_amount'], 2) . ").");
+
+                if ($options['send_emails'] && !empty($res['bills'])) {
+                    $mailService = new MailService($db);
+                    $invEmailsSent = 0;
+                    foreach ($res['bills'] as $b) {
+                        $billDetail = $billModel->findByIdWithItems((int)$b['id']);
+                        if ($billDetail && !empty($billDetail['resident_email'])) {
+                            $mRes = $mailService->sendInvoiceNotification($socId, $billDetail);
+                            if (!empty($mRes['success'])) $invEmailsSent++;
+                        }
+                    }
+                    cliLog("    ↳ Dispatched {$invEmailsSent} invoice email notification(s).");
+                    $summary['emails_sent'] = ($summary['emails_sent'] ?? 0) + $invEmailsSent;
+                }
             } catch (\Throwable $e) {
                 cliLog("  • {$socName}: Generation error: " . $e->getMessage(), 'ERROR');
             }
