@@ -619,6 +619,12 @@ class Router {
                     } else {
                         $ctrl->index();
                     }
+                // 17. Live Backend PHPUnit Test Runner
+                case 'phpunit':
+                case 'test-runner':
+                case 'unit-tests':
+                    $ctrl = new \App\Controllers\PhpUnitTestController();
+                    $ctrl->run();
                     break;
 
                 default:
