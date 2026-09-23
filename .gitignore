@@ -5,4 +5,9 @@ backend/public/uploads/helpdesk/*
 !backend/public/uploads/helpdesk/.gitkeep
 backend/logs/*
 !backend/logs/.gitkeep
+backend/cache/*
+!backend/cache/.htaccess
+!backend/cache/.gitkeep
+*.cache
 *.log
+
