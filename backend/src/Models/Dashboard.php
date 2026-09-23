@@ -27,6 +27,8 @@ class Dashboard extends BaseModel {
             $noticeModel = new Notice($this->db);
             $recentNotices = array_slice($noticeModel->getAll(0), 0, 4);
 
+            $securityOnDuty = (int)$this->db->query("SELECT COUNT(*) FROM users u JOIN roles r ON u.role_id = r.id WHERE (r.role_code = 'security_guard' OR r.role_code LIKE '%guard%' OR r.role_code LIKE '%security%' OR r.name LIKE '%Security%' OR r.name LIKE '%Guard%') AND u.is_deleted = 0 AND u.status = 'Active'")->fetchColumn();
+
             return [
                 'name' => 'Global Platform View',
                 'societyCode' => 'GLOBAL',
@@ -35,7 +37,7 @@ class Dashboard extends BaseModel {
                 'totalUnits' => $totalUnits,
                 'occupiedUnits' => $occupiedUnits,
                 'vacantUnits' => $vacantUnits,
-                'securityStaffOnDuty' => 24,
+                'securityStaffOnDuty' => $securityOnDuty,
                 'activeVisitors' => $activeVisitors,
                 'maintenanceCollected' => $rate,
                 'totalRevenueMonthly' => $collected,
@@ -67,22 +69,25 @@ class Dashboard extends BaseModel {
         $towers = $stmtTowers->fetchAll();
 
         // 3. Unit Counts
-        $totalUnits = (int)$this->db->query("SELECT COUNT(*) FROM units WHERE society_id = {$societyId}")->fetchColumn();
-        $occupiedUnits = (int)$this->db->query("SELECT COUNT(*) FROM units WHERE society_id = {$societyId} AND occupancy_status != 'Vacant'")->fetchColumn();
+        $totalUnits = (int)$this->db->query("SELECT COUNT(*) FROM units WHERE society_id = {$societyId} AND is_deleted = 0")->fetchColumn();
+        $occupiedUnits = (int)$this->db->query("SELECT COUNT(*) FROM units WHERE society_id = {$societyId} AND is_deleted = 0 AND occupancy_status != 'Vacant'")->fetchColumn();
         $vacantUnits = $totalUnits - $occupiedUnits;
 
         // 4. Visitors Inside
-        $activeVisitors = (int)$this->db->query("SELECT COUNT(*) FROM visitors WHERE society_id = {$societyId} AND status = 'Inside'")->fetchColumn();
+        $activeVisitors = (int)$this->db->query("SELECT COUNT(*) FROM visitors WHERE society_id = {$societyId} AND is_deleted = 0 AND status = 'Inside'")->fetchColumn();
 
         // 5. Billing Totals in ₹
-        $collected = (float)$this->db->query("SELECT COALESCE(SUM(amount), 0) FROM invoices WHERE society_id = {$societyId} AND status = 'Paid'")->fetchColumn();
-        $pending = (float)$this->db->query("SELECT COALESCE(SUM(amount), 0) FROM invoices WHERE society_id = {$societyId} AND status != 'Paid'")->fetchColumn();
+        $collected = (float)$this->db->query("SELECT COALESCE(SUM(amount), 0) FROM invoices WHERE society_id = {$societyId} AND is_deleted = 0 AND status = 'Paid'")->fetchColumn();
+        $pending = (float)$this->db->query("SELECT COALESCE(SUM(amount), 0) FROM invoices WHERE society_id = {$societyId} AND is_deleted = 0 AND status != 'Paid'")->fetchColumn();
         $rate = ($collected + $pending > 0) ? round(($collected / ($collected + $pending)) * 100, 1) : 100.0;
 
         // 6. Pending Complaints
-        $pendingTickets = (int)$this->db->query("SELECT COUNT(*) FROM complaints WHERE society_id = {$societyId} AND status != 'Resolved' AND status != 'Closed'")->fetchColumn();
+        $pendingTickets = (int)$this->db->query("SELECT COUNT(*) FROM complaints WHERE society_id = {$societyId} AND is_deleted = 0 AND status != 'Resolved' AND status != 'Closed'")->fetchColumn();
 
-        // 7. Recent lists
+        // 7. Active Security on Duty
+        $securityOnDuty = (int)$this->db->query("SELECT COUNT(*) FROM users u JOIN roles r ON u.role_id = r.id WHERE u.society_id = {$societyId} AND (r.role_code = 'security_guard' OR r.role_code LIKE '%guard%' OR r.role_code LIKE '%security%' OR r.name LIKE '%Security%' OR r.name LIKE '%Guard%') AND u.is_deleted = 0 AND u.status = 'Active'")->fetchColumn();
+
+        // 8. Recent lists
         $visitorModel = new Visitor($this->db);
         $recentVisitors = array_slice($visitorModel->getAll($societyId), 0, 6);
 
@@ -94,19 +99,19 @@ class Dashboard extends BaseModel {
 
         return [
             'name' => $society['name'] ?? 'Society Management',
-            'societyCode' => $society['society_code'] ?? 'EMR-01',
-            'tagline' => $society['tagline'] ?? 'Ultra-Luxury Smart Community',
-            'address' => $society['address'] ?? 'Palm Boulevard',
+            'societyCode' => $society['society_code'] ?? '',
+            'tagline' => $society['tagline'] ?? '',
+            'address' => $society['address'] ?? '',
             'totalUnits' => $totalUnits,
             'occupiedUnits' => $occupiedUnits,
             'vacantUnits' => $vacantUnits,
-            'securityStaffOnDuty' => 8,
+            'securityStaffOnDuty' => $securityOnDuty,
             'activeVisitors' => $activeVisitors,
             'maintenanceCollected' => $rate,
             'totalRevenueMonthly' => $collected,
             'pendingComplaints' => $pendingTickets,
             'towers' => array_map(function($t) use ($societyId) {
-                $occupied = (int)$this->db->query("SELECT COUNT(*) FROM units WHERE society_id = {$societyId} AND tower_id = {$t['id']} AND occupancy_status != 'Vacant'")->fetchColumn();
+                $occupied = (int)$this->db->query("SELECT COUNT(*) FROM units WHERE society_id = {$societyId} AND tower_id = {$t['id']} AND is_deleted = 0 AND occupancy_status != 'Vacant'")->fetchColumn();
                 return [
                     'id' => $t['tower_code'],
                     'name' => $t['name'],
@@ -121,3 +126,4 @@ class Dashboard extends BaseModel {
         ];
     }
 }
+

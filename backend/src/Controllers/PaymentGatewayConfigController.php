@@ -147,6 +147,12 @@ class PaymentGatewayConfigController extends BaseController {
                 'resident_email' => 'admin@society.in'
             ]);
 
+            if (!empty($testOrder['is_simulation'])) {
+                $errDetail = $testOrder['error_message'] ?? 'Authentication failed against gateway API.';
+                $this->error("Connection test failed: {$provider} rejected these credentials ({$errDetail}).", 400);
+                return;
+            }
+
             $this->success([
                 'provider' => $provider,
                 'order_id' => $testOrder['order_id'],

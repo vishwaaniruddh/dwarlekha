@@ -34,6 +34,7 @@ class BootstrapController extends BaseController {
             $roleService = new RoleService();
             $unitTypeService = new UnitTypeService();
             $geoService = new GeoService();
+            $contactService = new \App\Services\SocietyContactService();
             $towerModel = new Tower();
 
             $currUser = \App\Config\RbacGuard::getCurrentUser();
@@ -59,9 +60,7 @@ class BootstrapController extends BaseController {
             $towers = $towerModel->getBySocietyId();
             $unitTypes = $unitTypeService->getUnitTypes();
             $geoLookup = $geoService->getGeoLookup();
-
-            $activeSocietyId = TenantContext::getSocietyId();
-            $activeSocietyCode = TenantContext::getSocietyCode();
+            $directoryContacts = $contactService->getContacts(['society_id' => $activeSocietyId]);
 
             $payload = array_merge($metrics, [
                 'activeTenant' => [
@@ -82,7 +81,9 @@ class BootstrapController extends BaseController {
                 'permissions' => $permissions,
                 'towers' => $towers,
                 'unitTypes' => $unitTypes,
-                'geo' => $geoLookup
+                'geo' => $geoLookup,
+                'directory' => $directoryContacts,
+                'contacts' => $directoryContacts
             ]);
 
             $this->success($payload, 'Bootstrap telemetry aggregated successfully');

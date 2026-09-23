@@ -27,6 +27,7 @@ use App\Controllers\PushNotificationController;
 use App\Controllers\VehicleController;
 use App\Controllers\SyncController;
 use App\Controllers\SmtpConfigController;
+use App\Controllers\SocietyContactController;
 
 class Router {
     public function dispatch(): void {
@@ -619,7 +620,39 @@ class Router {
                     } else {
                         $ctrl->index();
                     }
-                // 17. Live Backend PHPUnit Test Runner
+                    break;
+
+                // 17. Society Directory, Helplines & Emergency Contacts
+                case 'directory':
+                case 'contacts':
+                case 'helpline':
+                case 'helplines':
+                    $ctrl = new \App\Controllers\SocietyContactController();
+                    if ($method === 'GET' && $action === 'presets') {
+                        $ctrl->presets();
+                    } elseif ($method === 'GET' && $action === 'all') {
+                        $ctrl->listAll();
+                    } elseif ($method === 'GET' && is_numeric($action)) {
+                        $ctrl->show($action);
+                    } elseif ($method === 'POST' && empty($action)) {
+                        $ctrl->create();
+                    } elseif ($method === 'PUT' && is_numeric($action)) {
+                        $ctrl->update($action);
+                    } elseif ($method === 'DELETE' && is_numeric($action)) {
+                        $ctrl->delete($action);
+                    } else {
+                        $ctrl->index();
+                    }
+                    break;
+
+                // 18. Global Multi-Entity Search (Societies, Persons, Vehicles)
+                case 'search':
+                case 'global-search':
+                    $ctrl = new \App\Controllers\GlobalSearchController();
+                    $ctrl->search();
+                    break;
+
+                // 19. Live Backend PHPUnit Test Runner
                 case 'phpunit':
                 case 'test-runner':
                 case 'unit-tests':

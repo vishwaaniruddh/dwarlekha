@@ -51,6 +51,9 @@ class RazorpayAdapter implements PaymentGatewayInterface {
         curl_close($ch);
 
         if ($curlError || $httpCode >= 400 || !$response) {
+            $errData = json_decode($response ?: '', true);
+            $errMsg = $errData['error']['description'] ?? ($response ?: ($curlError ?: 'API request failed'));
+
             // Development fallback simulator if test keys are offline
             if ($this->testMode) {
                 return [
@@ -61,10 +64,11 @@ class RazorpayAdapter implements PaymentGatewayInterface {
                     'currency' => 'INR',
                     'key_id' => $this->keyId,
                     'receipt' => $cleanReceipt,
-                    'is_simulation' => true
+                    'is_simulation' => true,
+                    'error_message' => "HTTP {$httpCode}: {$errMsg}"
                 ];
             }
-            throw new \RuntimeException("Razorpay Order creation failed (HTTP $httpCode): " . ($response ?: $curlError));
+            throw new \RuntimeException("Razorpay Order creation failed (HTTP $httpCode): " . ($errMsg ?: $curlError));
         }
 
         $resData = json_decode($response, true);
